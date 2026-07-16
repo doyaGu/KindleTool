@@ -137,8 +137,10 @@ const fn profile(
     digest: DigestKind,
 ) -> FormatProfile {
     let default_envelope = match format {
-        PackageFormat::SignatureEnvelope | PackageFormat::Android => DefaultEnvelope::None,
-        _ => DefaultEnvelope::Signed,
+        PackageFormat::OtaV2 | PackageFormat::RecoveryV2 | PackageFormat::Userdata => {
+            DefaultEnvelope::Signed
+        }
+        _ => DefaultEnvelope::None,
     };
     let target_metadata = match layout {
         HeaderLayout::OtaV1 => TargetMetadata::Device,

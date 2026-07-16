@@ -1249,4 +1249,16 @@ impl PackageSpec {
             Self::Userdata(_) => BundleMagic::Gzip([0x1F, 0x8B, 0x08, 0]),
         }
     }
+
+    /// Whether the static format catalog recommends an SP01 envelope.
+    #[must_use]
+    pub fn default_envelope(&self) -> bool {
+        if matches!(self, Self::RecoveryV1(spec) if spec.is_revision2()) {
+            return true;
+        }
+        matches!(
+            self.magic().profile().default_envelope,
+            crate::format::DefaultEnvelope::Signed
+        )
+    }
 }

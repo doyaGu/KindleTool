@@ -217,7 +217,11 @@ fn create(args: CreateArgs) -> Result<CommandStatus> {
             .build(&inputs, writer)?;
         archive
     };
-    let signed = !matches!(common.envelope, EnvelopeArg::None);
+    let signed = match common.envelope {
+        EnvelopeArg::Auto => spec.default_envelope(),
+        EnvelopeArg::Signed => true,
+        EnvelopeArg::None => false,
+    };
     let options = if signed {
         EncodeOptions::signed(PayloadSource::Decoded, &signing_key, certificate)?
     } else {
