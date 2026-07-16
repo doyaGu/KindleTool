@@ -1,8 +1,9 @@
 //! Public v2 package lifecycle behavior.
 
 use kindletool::{
-    DeviceCode, EncodeOptions, FirmwareRange, FirmwareRevision, OtaV1Kind, OtaV1Spec, Package,
-    PackageEncoder, PackageSpec, PayloadSource, PayloadView,
+    DeviceCode, EncodeOptions, Error, FirmwareRange, FirmwareRevision, OtaV1Kind, OtaV1Spec,
+    Package, PackageEncoder, PackageSpec, PayloadSource, PayloadView, RecoveryV1Kind,
+    RecoveryV1Spec,
 };
 use std::io::Cursor;
 
@@ -36,4 +37,47 @@ fn package_encoder_and_consuming_payload_view_round_trip() {
         .copy_payload(PayloadView::Decoded, &mut decoded)
         .unwrap();
     assert_eq!(decoded, payload);
+}
+
+#[test]
+fn component_parser_rejects_an_inverted_firmware_range() {
+    let mut encoded = vec![0_u8; 4 + kindletool::model::RECOVERY_HEADER_LEN];
+    encoded[..4].copy_from_slice(b"CB01");
+    encoded[4..12].copy_from_slice(&2_u64.to_le_bytes());
+    encoded[12..20].copy_from_slice(&1_u64.to_le_bytes());
+    encoded[20..84].fill(b'0');
+
+    let Err(error) = Package::parse(Cursor::new(encoded)) else {
+        panic!("inverted range must be rejected");
+    };
+    assert!(matches!(
+        error,
+        Error::InvalidField {
+            field: "firmware range",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn legacy_recovery_exposes_its_target_device() {
+    let target = DeviceCode(0x201);
+    let spec = PackageSpec::RecoveryV1(RecoveryV1Spec::legacy(
+        RecoveryV1Kind::Fb01,
+        0,
+        0,
+        0,
+        u32::from(target.0),
+    ));
+    let mut encoded = Vec::new();
+    PackageEncoder::encode(
+        &spec,
+        Cursor::new([]),
+        &mut encoded,
+        EncodeOptions::unsigned(PayloadSource::Decoded),
+    )
+    .unwrap();
+
+    let package = Package::parse(Cursor::new(encoded)).unwrap();
+    assert_eq!(package.descriptor().target_devices(), &[target]);
 }

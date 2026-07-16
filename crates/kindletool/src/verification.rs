@@ -1,7 +1,7 @@
 //! Fixed package verification policies and typed verdicts.
 
 use crate::crypto::VerificationKey;
-use crate::model::{Board, Certificate, PackageDescriptor, Platform};
+use crate::model::{Board, Certificate, PackageDescriptor, PackageHeader, Platform};
 use crate::{DeviceCode, FirmwareRevision, Md5Digest, Sha256Digest};
 
 /// One of the two supported verification policies.
@@ -382,6 +382,11 @@ pub(crate) fn target_check(
     context: &VerificationContext,
 ) -> TargetCheck {
     let device = check_optional(context.target_device(), |target| {
+        if let PackageHeader::RecoveryV1(header) = descriptor.header() {
+            if let Some(device) = header.legacy_device() {
+                return Some(device == u32::from(target.0));
+            }
+        }
         let devices = descriptor.target_devices();
         (!devices.is_empty()).then(|| devices.contains(&target))
     });

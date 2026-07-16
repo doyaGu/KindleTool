@@ -713,11 +713,13 @@ fn parse_recovery_v1(magic: BundleMagic, raw: &[u8]) -> Result<PackageHeader> {
             magic_2: le_u32_at(raw, 48, "magic 2")?,
             minor: le_u32_at(raw, 52, "minor")?,
             device: None,
+            device_code: None,
             platform: Some(Platform(le_u32_at(raw, 56, "platform")?)),
             header_revision,
             board: Some(Board(le_u32_at(raw, 64, "board")?)),
         }))
     } else {
+        let device = le_u32_at(raw, 56, "device")?;
         Ok(PackageHeader::RecoveryV1(RecoveryV1Header {
             magic,
             target_revision: None,
@@ -729,7 +731,8 @@ fn parse_recovery_v1(magic: BundleMagic, raw: &[u8]) -> Result<PackageHeader> {
             magic_1: le_u32_at(raw, 44, "magic 1")?,
             magic_2: le_u32_at(raw, 48, "magic 2")?,
             minor: le_u32_at(raw, 52, "minor")?,
-            device: Some(le_u32_at(raw, 56, "device")?),
+            device: Some(device),
+            device_code: u16::try_from(device).ok().map(DeviceCode),
             platform: None,
             header_revision,
             board: None,
@@ -768,6 +771,9 @@ fn parse_recovery_v2(raw: &[u8]) -> Result<PackageHeader> {
 }
 
 fn parse_component(raw: &[u8]) -> Result<PackageHeader> {
+    let minimum_revision = le_u64_at(raw, 0, "minimum revision")?;
+    let target_revision = le_u64_at(raw, 8, "target revision")?;
+    FirmwareRange::new(minimum_revision.into(), target_revision.into())?;
     let count = usize::try_from(le_u32_at(raw, 92, "device count")?).map_err(|_| {
         invalid(
             "device count",
@@ -782,8 +788,8 @@ fn parse_component(raw: &[u8]) -> Result<PackageHeader> {
         .map(|_| devices_cursor.u16("device").map(DeviceCode))
         .collect::<Result<Vec<_>>>()?;
     Ok(PackageHeader::Component(ComponentHeader {
-        minimum_revision: le_u64_at(raw, 0, "minimum revision")?,
-        target_revision: le_u64_at(raw, 8, "target revision")?,
+        minimum_revision,
+        target_revision,
         sha256: crate::Sha256Digest::from_str(&decode_clear_hex(
             slice_at(raw, 16, 64, "SHA-256")?,
             64,

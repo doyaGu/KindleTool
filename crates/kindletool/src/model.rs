@@ -705,6 +705,8 @@ pub struct RecoveryV1Header {
     pub(crate) minor: u32,
     /// Legacy target device for header revisions before 2.
     pub(crate) device: Option<u32>,
+    /// Legacy selector normalized for the common target query when representable.
+    pub(crate) device_code: Option<DeviceCode>,
     /// Platform used by header revision 2.
     pub(crate) platform: Option<Platform>,
     /// Header revision.
@@ -1160,6 +1162,7 @@ impl PackageDescriptor {
         match &self.header {
             PackageHeader::OtaV1(header) => std::slice::from_ref(&header.device),
             PackageHeader::OtaV2(header) => &header.devices,
+            PackageHeader::RecoveryV1(header) => header.device_code.as_slice(),
             PackageHeader::RecoveryV2(header) => &header.devices,
             PackageHeader::Component(header) => &header.devices,
             _ => &[],
