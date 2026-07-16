@@ -131,10 +131,18 @@ impl ArchiveInput {
 
     /// Map a source to its final path component.
     pub fn from_source(source: PathBuf) -> Result<Self> {
-        let destination = safe_input_path(&source)?;
+        let destination =
+            source
+                .file_name()
+                .and_then(OsStr::to_str)
+                .ok_or_else(|| Error::InvalidField {
+                    field: "archive input",
+                    message: format!("{} has no UTF-8 final path component", source.display()),
+                })?;
+        let destination = ArchivePath::new(destination)?;
         Ok(Self {
             source,
-            destination: ArchivePath::new(archive_path_text(&destination))?,
+            destination,
         })
     }
 
@@ -825,15 +833,6 @@ fn collect_entries(inputs: &[ArchiveInput], legacy: bool) -> Result<Vec<SourceEn
     Ok(output)
 }
 
-fn safe_input_path(input: &Path) -> Result<PathBuf> {
-    let path = input
-        .components()
-        .filter(|component| !matches!(component, Component::CurDir))
-        .collect::<PathBuf>();
-    validate_source_archive_path(&path)?;
-    Ok(path)
-}
-
 fn append_source_entry<W: Write>(tar: &mut Builder<W>, entry: &SourceEntry) -> Result<()> {
     let file_type = entry.metadata.file_type();
     let mut header = source_header(&entry.metadata, &entry.archive_path)?;
@@ -1078,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_source_paths_preserve_the_legacy_archive_path() {
+    fn absolute_source_paths_use_the_explicit_safe_destination() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("asset.txt"), b"asset").unwrap();
         let key = SigningKey::default_jailbreak().unwrap();
@@ -1097,7 +1096,8 @@ mod tests {
             .unwrap()
             .map(|entry| entry.unwrap().path().unwrap().into_owned())
             .collect::<Vec<_>>();
-        assert!(paths.contains(&source.path().join("asset.txt")));
+        let root = source.path().file_name().unwrap();
+        assert!(paths.contains(&PathBuf::from(root).join("asset.txt")));
     }
 
     #[test]
