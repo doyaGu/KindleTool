@@ -14,7 +14,7 @@ const COMPONENT: &[u8] = b"component payload";
 #[test]
 fn structural_accepts_a_component_with_one_matching_content_file() {
     let archive = component_archive(&[("component.bin", COMPONENT)]);
-    let encoded = component_package(&archive, digest(COMPONENT), &[DeviceCode(0x201)]);
+    let encoded = component_package(&archive, &digest(COMPONENT), &[DeviceCode(0x201)]);
     let mut package = Package::parse(Cursor::new(encoded)).unwrap();
 
     let outcome = package
@@ -34,7 +34,11 @@ fn structural_accepts_a_component_with_one_matching_content_file() {
 #[test]
 fn structural_rejects_a_component_header_digest_mismatch() {
     let archive = component_archive(&[("component.bin", COMPONENT)]);
-    let encoded = component_package(&archive, digest(b"different content"), &[DeviceCode(0x201)]);
+    let encoded = component_package(
+        &archive,
+        &digest(b"different content"),
+        &[DeviceCode(0x201)],
+    );
     let mut package = Package::parse(Cursor::new(encoded)).unwrap();
 
     let outcome = package
@@ -57,7 +61,7 @@ fn structural_rejects_an_ambiguous_component_archive() {
         ("component.bin", COMPONENT),
         ("second.bin", b"second component"),
     ]);
-    let encoded = component_package(&archive, digest(COMPONENT), &[DeviceCode(0x201)]);
+    let encoded = component_package(&archive, &digest(COMPONENT), &[DeviceCode(0x201)]);
     let mut package = Package::parse(Cursor::new(encoded)).unwrap();
 
     let outcome = package
@@ -77,7 +81,7 @@ fn structural_rejects_an_ambiguous_component_archive() {
 #[test]
 fn component_targets_are_reported_independently() {
     let archive = component_archive(&[("component.bin", COMPONENT)]);
-    let encoded = component_package(&archive, digest(COMPONENT), &[DeviceCode(0x201)]);
+    let encoded = component_package(&archive, &digest(COMPONENT), &[DeviceCode(0x201)]);
     let context = VerificationContext::new()
         .with_target_device(DeviceCode(0x202))
         .with_target_firmware(FirmwareRevision::new(11))
@@ -127,7 +131,7 @@ fn component_archive(files: &[(&str, &[u8])]) -> Vec<u8> {
     archive
 }
 
-fn component_package(archive: &[u8], sha256: String, devices: &[DeviceCode]) -> Vec<u8> {
+fn component_package(archive: &[u8], sha256: &str, devices: &[DeviceCode]) -> Vec<u8> {
     let mut encoded =
         Vec::with_capacity(4 + kindletool::model::RECOVERY_HEADER_LEN + archive.len());
     encoded.extend_from_slice(b"CB01");
@@ -138,7 +142,7 @@ fn component_package(archive: &[u8], sha256: String, devices: &[DeviceCode]) -> 
     header[80..84].copy_from_slice(&7_u32.to_le_bytes());
     header[84..88].copy_from_slice(&12_u32.to_le_bytes());
     header[88..92].copy_from_slice(&1_u32.to_le_bytes());
-    header[92..96].copy_from_slice(&(devices.len() as u32).to_le_bytes());
+    header[92..96].copy_from_slice(&u32::try_from(devices.len()).unwrap().to_le_bytes());
     for (index, device) in devices.iter().enumerate() {
         let offset = 96 + index * 2;
         header[offset..offset + 2].copy_from_slice(&device.0.to_le_bytes());
