@@ -35,6 +35,15 @@ To compile for Windows:
 		5) Compile using "make" in the tool's directory
 		6) Install it by running "make install"
 
+	Visual Studio 2022+)
+		A native MSVC build is available through CMake and vcpkg.
+		1) Install: vcpkg install libarchive:x64-windows nettle:x64-windows gmp:x64-windows zlib:x64-windows
+		2) Set VCPKG_ROOT to the vcpkg checkout directory.
+		3) Run: cmake --preset vs2022-x64
+		4) Run: cmake --build --preset vs2022-x64-release
+		The executable is written below out/build/vs2022-x64/Release.
+		Visual Studio can also open this repository folder and select the vs2022-x64 CMake preset.
+
 
 ----
 

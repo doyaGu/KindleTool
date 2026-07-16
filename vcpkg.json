@@ -1,0 +1,9 @@
+{
+  "name": "kindletool",
+  "version-string": "1.6.6",
+  "dependencies": [
+    "libarchive",
+    "nettle",
+    "zlib"
+  ]
+}

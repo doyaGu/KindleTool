@@ -7,3 +7,7 @@ KindleTool.xcodeproj/xcuserdata
 
 # Nix Build Output
 result
+
+# CMake and vcpkg local build output
+out/
+vcpkg_installed/
