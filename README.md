@@ -93,3 +93,12 @@ Generated device, mangle, and jailbreak-key tables are derived from the frozen C
 checked in CI. New formats normally require one `FormatRecord`; a new header codec is added only
 when the on-disk layout is genuinely different. The project is GPL-3.0-or-later and is not
 published to crates.io.
+
+Local packages that cannot be redistributed can be verified through the read-only corpus harness.
+Paths use the host platform's path-list separator. Every source is copied to temporary storage
+before parsing and structural verification:
+
+```sh
+KINDLETOOL_CORPUS="/path/KUAL.bin:/path/USBNetLite.bin:/path/official-FB03.bin" \
+  cargo test -p kindletool --test corpus -- --nocapture
+```
