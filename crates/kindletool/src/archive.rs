@@ -554,40 +554,76 @@ fn parse_manifest(index: &[u8], issues: &mut Vec<ArchiveIssue>) -> Vec<ManifestR
     };
     text.lines()
         .filter_map(|line| {
-            let fields = line.split_whitespace().collect::<Vec<_>>();
-            if fields.len() < 5 {
+            let Some((file_type, remainder)) = take_front_field(line) else {
                 issues.push(ArchiveIssue::ManifestMismatch(format!(
                     "malformed line: {line}"
                 )));
                 return None;
-            }
-            let Ok(file_type) = fields[0].parse() else {
+            };
+            let Some((md5, remainder)) = take_front_field(remainder) else {
+                issues.push(ArchiveIssue::ManifestMismatch(format!(
+                    "malformed line: {line}"
+                )));
+                return None;
+            };
+            let Some((_display_name, remainder)) = take_back_field(remainder) else {
+                issues.push(ArchiveIssue::ManifestMismatch(format!(
+                    "malformed line: {line}"
+                )));
+                return None;
+            };
+            let Some((blocks, path)) = take_back_field(remainder) else {
+                issues.push(ArchiveIssue::ManifestMismatch(format!(
+                    "malformed line: {line}"
+                )));
+                return None;
+            };
+            let Ok(file_type) = file_type.parse() else {
                 issues.push(ArchiveIssue::ManifestMismatch(format!("file type: {line}")));
                 return None;
             };
-            if fields[1].len() != 32 || !fields[1].bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            if md5.len() != 32 || !md5.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 issues.push(ArchiveIssue::ManifestMismatch(format!("MD5: {line}")));
                 return None;
             }
-            let Ok(blocks) = fields[fields.len() - 2].parse() else {
+            let Ok(blocks) = blocks.parse() else {
                 issues.push(ArchiveIssue::ManifestMismatch(format!(
                     "block count: {line}"
                 )));
                 return None;
             };
-            let path = fields[2..fields.len() - 2].join(" ");
-            if crate::ArchivePath::new(path.clone()).is_err() {
-                issues.push(ArchiveIssue::UnsafePath(path));
+            if crate::ArchivePath::new(path.to_owned()).is_err() {
+                issues.push(ArchiveIssue::UnsafePath(path.to_owned()));
                 return None;
             }
             Some(ManifestRecord {
                 file_type,
-                md5: fields[1].to_owned(),
-                path,
+                md5: md5.to_owned(),
+                path: path.to_owned(),
                 blocks,
             })
         })
         .collect()
+}
+
+fn take_front_field(input: &str) -> Option<(&str, &str)> {
+    let input = input.trim_start_matches(char::is_whitespace);
+    let boundary = input.find(char::is_whitespace)?;
+    let field = &input[..boundary];
+    (!field.is_empty()).then_some((
+        field,
+        input[boundary..].trim_start_matches(char::is_whitespace),
+    ))
+}
+
+fn take_back_field(input: &str) -> Option<(&str, &str)> {
+    let input = input.trim_end_matches(char::is_whitespace);
+    let boundary = input.rfind(char::is_whitespace)?;
+    let field = input[boundary..].trim_start_matches(char::is_whitespace);
+    (!field.is_empty()).then_some((
+        field,
+        input[..boundary].trim_end_matches(char::is_whitespace),
+    ))
 }
 
 fn verify_archive_signature(

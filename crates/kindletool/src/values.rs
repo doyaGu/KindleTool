@@ -162,6 +162,7 @@ impl ArchivePath {
         let valid = !value.is_empty()
             && !value.starts_with('/')
             && !value.contains('\\')
+            && !value.chars().any(char::is_control)
             && value
                 .split('/')
                 .all(|part| !part.is_empty() && part != "." && part != "..");

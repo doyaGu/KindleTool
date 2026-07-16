@@ -4,8 +4,8 @@ use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use kindletool::{
-    ArchiveInput, ArchiveIssue, ArchiveKind, ArchiveOptions, SafeExtractionOutcome, SafeExtractor,
-    SigningKey, UpdateArchiveBuilder, UpdateArchiveVerifier, VerificationLimits,
+    ArchiveInput, ArchiveIssue, ArchiveKind, ArchiveOptions, ArchivePath, SafeExtractionOutcome,
+    SafeExtractor, SigningKey, UpdateArchiveBuilder, UpdateArchiveVerifier, VerificationLimits,
     VerificationPolicy,
 };
 use std::fs;
@@ -43,6 +43,30 @@ fn structural_rejects_a_manifest_digest_mismatch() {
         "{:?}",
         report.issues()
     );
+}
+
+#[test]
+fn archive_builder_preserves_repeated_spaces_in_manifest_paths() {
+    let key = SigningKey::default_jailbreak().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let input = source.path().join("payload.bin");
+    fs::write(&input, b"payload contents").unwrap();
+    let destination = ArchivePath::new("payload  file.bin").unwrap();
+    let mut archive = Vec::new();
+
+    UpdateArchiveBuilder::new(&key)
+        .build(&[ArchiveInput::new(input, destination)], &mut archive)
+        .unwrap();
+
+    let report = structural_verifier().verify(Cursor::new(archive)).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues());
+}
+
+#[test]
+fn archive_paths_reject_manifest_control_characters() {
+    for path in ["line\nbreak", "carriage\rreturn", "nul\0byte"] {
+        assert!(ArchivePath::new(path).is_err(), "accepted {path:?}");
+    }
 }
 
 #[test]
