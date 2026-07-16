@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/kindletool"]
+members = ["crates/kindletool", "crates/kindletool-cli"]
 exclude = ["fuzz"]
 resolver = "3"
 

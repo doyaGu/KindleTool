@@ -1,0 +1,22 @@
+[package]
+name = "kindletool-cli"
+description = "Drop-in compatible KindleTool command-line application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "kindletool"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+clap.workspace = true
+kindletool = { path = "../kindletool" }
+tempfile.workspace = true
+
+[lints]
+workspace = true
