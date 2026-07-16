@@ -65,6 +65,34 @@ fn structural_rejects_a_manifest_block_count_mismatch() {
 }
 
 #[test]
+fn structural_rejects_a_manifest_file_type_mismatch() {
+    let key = SigningKey::default_jailbreak().unwrap();
+    let archive = rewrite_manifest(&valid_archive(&key), |manifest| {
+        manifest.replacen("128 ", "129 ", 1)
+    });
+
+    let report = structural_verifier().verify(Cursor::new(archive)).unwrap();
+
+    assert!(!report.is_valid());
+    assert!(report.issues().iter().any(
+        |issue| matches!(issue, ArchiveIssue::ManifestMismatch(message) if message == "file type for payload.bin")
+    ));
+}
+
+#[test]
+fn structural_rejects_a_malformed_manifest_record() {
+    let key = SigningKey::default_jailbreak().unwrap();
+    let archive = rewrite_manifest(&valid_archive(&key), |_| "malformed record\n".to_owned());
+
+    let report = structural_verifier().verify(Cursor::new(archive)).unwrap();
+
+    assert!(!report.is_valid());
+    assert!(report.issues().iter().any(
+        |issue| matches!(issue, ArchiveIssue::ManifestMismatch(message) if message == "malformed line: malformed record")
+    ));
+}
+
+#[test]
 fn structural_rejects_a_missing_manifest() {
     let key = SigningKey::default_jailbreak().unwrap();
     let mut entries = read_entries(&valid_archive(&key));
@@ -263,15 +291,41 @@ fn verification_limits_bound_entries_content_paths_and_manifest_bytes() {
 fn structural_rejects_a_link_that_escapes_the_archive_root() {
     let key = SigningKey::default_jailbreak().unwrap();
     let entries = read_entries(&valid_archive(&key));
+    for entry_type in [tar::EntryType::Symlink, tar::EntryType::Link] {
+        let archive = write_entries_with(&entries, |archive| {
+            let mut header = Header::new_gnu();
+            header.set_entry_type(entry_type);
+            header.set_path("dir/link").unwrap();
+            header.set_link_name("../../escape").unwrap();
+            header.set_size(0);
+            header.set_mode(0o777);
+            header.set_cksum();
+            archive.append(&header, std::io::empty()).unwrap();
+        });
+
+        let report = structural_verifier().verify(Cursor::new(archive)).unwrap();
+
+        assert!(!report.is_valid());
+        assert!(
+            report
+                .issues()
+                .iter()
+                .any(|issue| matches!(issue, ArchiveIssue::UnsafePath(path) if path == "dir/link"))
+        );
+    }
+}
+
+#[test]
+fn structural_rejects_a_parent_relative_archive_path() {
+    let key = SigningKey::default_jailbreak().unwrap();
+    let entries = read_entries(&valid_archive(&key));
     let archive = write_entries_with(&entries, |archive| {
         let mut header = Header::new_gnu();
-        header.set_entry_type(tar::EntryType::Symlink);
-        header.set_path("dir/link").unwrap();
-        header.set_link_name("../../escape").unwrap();
-        header.set_size(0);
-        header.set_mode(0o777);
+        header.set_size(1);
+        header.set_mode(0o644);
+        header.as_mut_bytes()[..10].copy_from_slice(b"../escape\0");
         header.set_cksum();
-        archive.append(&header, std::io::empty()).unwrap();
+        archive.append(&header, Cursor::new(b"x")).unwrap();
     });
 
     let report = structural_verifier().verify(Cursor::new(archive)).unwrap();
@@ -281,7 +335,7 @@ fn structural_rejects_a_link_that_escapes_the_archive_root() {
         report
             .issues()
             .iter()
-            .any(|issue| matches!(issue, ArchiveIssue::UnsafePath(path) if path == "dir/link"))
+            .any(|issue| matches!(issue, ArchiveIssue::UnsafePath(path) if path == "../escape"))
     );
 }
 
