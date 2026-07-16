@@ -62,6 +62,22 @@ pub(crate) enum DigestKind {
     None,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DefaultEnvelope {
+    Signed,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TargetMetadata {
+    Device,
+    Devices,
+    RecoveryLayout,
+    PlatformDevices,
+    PlatformBoardDevices,
+    None,
+}
+
 /// Immutable metadata describing one Kindle package magic.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FormatProfile {
@@ -71,6 +87,8 @@ pub struct FormatProfile {
     pub(crate) layout: HeaderLayout,
     pub(crate) payload_storage: PayloadStorage,
     pub(crate) digest: DigestKind,
+    pub(crate) default_envelope: DefaultEnvelope,
+    pub(crate) target_metadata: TargetMetadata,
 }
 
 impl FormatProfile {
@@ -118,6 +136,18 @@ const fn profile(
     payload_storage: PayloadStorage,
     digest: DigestKind,
 ) -> FormatProfile {
+    let default_envelope = match format {
+        PackageFormat::SignatureEnvelope | PackageFormat::Android => DefaultEnvelope::None,
+        _ => DefaultEnvelope::Signed,
+    };
+    let target_metadata = match layout {
+        HeaderLayout::OtaV1 => TargetMetadata::Device,
+        HeaderLayout::OtaV2 => TargetMetadata::Devices,
+        HeaderLayout::RecoveryV2 => TargetMetadata::PlatformBoardDevices,
+        HeaderLayout::RecoveryV1 => TargetMetadata::RecoveryLayout,
+        HeaderLayout::Component => TargetMetadata::PlatformDevices,
+        HeaderLayout::Raw | HeaderLayout::Envelope => TargetMetadata::None,
+    };
     FormatProfile {
         format,
         archive_kind,
@@ -125,6 +155,8 @@ const fn profile(
         layout,
         payload_storage,
         digest,
+        default_envelope,
+        target_metadata,
     }
 }
 
@@ -296,11 +328,23 @@ pub(crate) fn record(magic: BundleMagic) -> Option<&'static FormatRecord> {
 }
 
 pub(crate) fn magic_profile(magic: BundleMagic) -> &'static FormatProfile {
-    if matches!(magic, BundleMagic::Gzip(_)) {
+    let profile = if matches!(magic, BundleMagic::Gzip(_)) {
         &GZIP_PROFILE
     } else {
         &record(magic)
             .expect("fixed magic has a catalog record")
             .profile
-    }
+    };
+    debug_assert!(profile_is_consistent(*profile));
+    profile
+}
+
+const fn profile_is_consistent(profile: FormatProfile) -> bool {
+    let raw_has_no_target = !matches!(profile.layout, HeaderLayout::Raw | HeaderLayout::Envelope)
+        || matches!(profile.target_metadata, TargetMetadata::None);
+    let envelope_is_not_wrapped = !matches!(profile.layout, HeaderLayout::Envelope)
+        || matches!(profile.default_envelope, DefaultEnvelope::None);
+    let digest_matches_storage = !matches!(profile.digest, DigestKind::Md5)
+        || matches!(profile.payload_storage, PayloadStorage::Mangled);
+    raw_has_no_target && envelope_is_not_wrapped && digest_matches_storage
 }
