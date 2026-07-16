@@ -13,6 +13,7 @@ use std::io::{Cursor, Read};
 use tar::{Builder, Header};
 
 const INDEX: &str = "update-filelist.dat";
+const RECOVERY_INDEX: &str = "update-payload.dat";
 
 #[derive(Clone)]
 struct StoredEntry {
@@ -334,6 +335,61 @@ fn safe_extractor_leaves_no_destination_when_verification_rejects() {
 
     assert!(matches!(outcome, SafeExtractionOutcome::Rejected(_)));
     assert!(!destination.exists());
+}
+
+#[test]
+fn recovery_accepts_the_modern_update_payload_manifest() {
+    let key = SigningKey::default_jailbreak().unwrap();
+    let mut entries = read_entries(&valid_archive(&key));
+    for entry in &mut entries {
+        if entry.path == INDEX {
+            entry.path = RECOVERY_INDEX.to_owned();
+        } else if entry.path == format!("{INDEX}.sig") {
+            entry.path = format!("{RECOVERY_INDEX}.sig");
+        }
+    }
+    let verifier = UpdateArchiveVerifier::new(
+        ArchiveKind::Recovery,
+        VerificationPolicy::structural(),
+        None,
+        VerificationLimits::default(),
+    );
+
+    let report = verifier
+        .verify(Cursor::new(write_entries(&entries)))
+        .unwrap();
+
+    assert!(report.is_valid(), "{:?}", report.issues());
+}
+
+#[test]
+fn recovery_rejects_multiple_manifest_conventions_in_one_archive() {
+    let key = SigningKey::default_jailbreak().unwrap();
+    let mut entries = read_entries(&valid_archive(&key));
+    let mut modern = entries
+        .iter()
+        .filter(|entry| entry.path == INDEX || entry.path == format!("{INDEX}.sig"))
+        .cloned()
+        .collect::<Vec<_>>();
+    for entry in &mut modern {
+        entry.path = entry.path.replacen(INDEX, RECOVERY_INDEX, 1);
+    }
+    entries.extend(modern);
+    let verifier = UpdateArchiveVerifier::new(
+        ArchiveKind::Recovery,
+        VerificationPolicy::structural(),
+        None,
+        VerificationLimits::default(),
+    );
+
+    let report = verifier
+        .verify(Cursor::new(write_entries(&entries)))
+        .unwrap();
+
+    assert!(!report.is_valid());
+    assert!(report.issues().iter().any(
+        |issue| matches!(issue, ArchiveIssue::ManifestMismatch(message) if message.starts_with("multiple manifests:"))
+    ));
 }
 
 fn valid_archive(key: &SigningKey) -> Vec<u8> {

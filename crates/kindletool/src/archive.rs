@@ -17,6 +17,7 @@ use walkdir::WalkDir;
 
 /// Filename of the Kindle per-file bundle index.
 pub const INDEX_FILE_NAME: &str = "update-filelist.dat";
+const RECOVERY_INDEX_FILE_NAME: &str = "update-payload.dat";
 /// OTA bundle block size.
 pub const OTA_BLOCK_SIZE: u64 = 64;
 /// Recovery bundle block size.
@@ -397,7 +398,7 @@ fn verify_update_archive<R: Read>(
             issues.push(ArchiveIssue::LimitExceeded("uncompressed bytes"));
             break;
         }
-        if path == INDEX_FILE_NAME && declared > limits.max_manifest_bytes as u64 {
+        if is_manifest_name(kind, &path) && declared > limits.max_manifest_bytes as u64 {
             issues.push(ArchiveIssue::LimitExceeded("manifest bytes"));
             continue;
         }
@@ -422,7 +423,7 @@ fn verify_update_archive<R: Read>(
     let component_content = if kind == ArchiveKind::Component {
         let candidates = files
             .iter()
-            .filter(|(path, _)| path.as_str() != INDEX_FILE_NAME && !is_signature_path(path))
+            .filter(|(path, _)| !is_manifest_name(kind, path) && !is_signature_path(path))
             .collect::<Vec<_>>();
         if let [(_, file)] = candidates.as_slice() {
             ComponentContentCheck::Unique(spooled_sha256(&mut spool, file)?)
@@ -435,8 +436,23 @@ fn verify_update_archive<R: Read>(
         ComponentContentCheck::NotApplicable
     };
 
-    let Some(index_file) = files.get(INDEX_FILE_NAME) else {
-        issues.push(ArchiveIssue::MissingEntry(INDEX_FILE_NAME.to_owned()));
+    let manifests = manifest_names(kind)
+        .iter()
+        .filter_map(|name| files.get(*name).map(|file| (*name, file)))
+        .collect::<Vec<_>>();
+    let [(index_name, index_file)] = manifests.as_slice() else {
+        issues.push(if manifests.is_empty() {
+            ArchiveIssue::MissingEntry(manifest_names(kind).join(" or "))
+        } else {
+            ArchiveIssue::ManifestMismatch(format!(
+                "multiple manifests: {}",
+                manifests
+                    .iter()
+                    .map(|(name, _)| *name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        });
         return Ok(ArchiveVerificationReport {
             entries,
             issues,
@@ -493,7 +509,7 @@ fn verify_update_archive<R: Read>(
     }
 
     for path in files.keys() {
-        if path == INDEX_FILE_NAME || path == "update-filelist.dat.sig" || is_signature_path(path) {
+        if path == index_name || path == &format!("{index_name}.sig") || is_signature_path(path) {
             continue;
         }
         if !listed.contains(path) {
@@ -504,7 +520,7 @@ fn verify_update_archive<R: Read>(
     }
     for path in files
         .keys()
-        .filter(|path| is_signature_path(path) && path.as_str() != "update-filelist.dat.sig")
+        .filter(|path| is_signature_path(path) && path.as_str() != format!("{index_name}.sig"))
     {
         let source = &path[..path.len() - 4];
         if !listed.contains(source) {
@@ -518,8 +534,8 @@ fn verify_update_archive<R: Read>(
         policy,
         &mut spool,
         index_file,
-        files.get("update-filelist.dat.sig"),
-        INDEX_FILE_NAME,
+        files.get(&format!("{index_name}.sig")),
+        index_name,
         &mut issues,
     )?;
     Ok(ArchiveVerificationReport {
@@ -632,6 +648,18 @@ fn is_signature_path(path: &str) -> bool {
     Path::new(path)
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("sig"))
+}
+
+fn manifest_names(kind: ArchiveKind) -> &'static [&'static str] {
+    if kind == ArchiveKind::Recovery {
+        &[INDEX_FILE_NAME, RECOVERY_INDEX_FILE_NAME]
+    } else {
+        &[INDEX_FILE_NAME]
+    }
+}
+
+fn is_manifest_name(kind: ArchiveKind, path: &str) -> bool {
+    manifest_names(kind).contains(&path)
 }
 
 /// Builds Kindle-compatible GNU tar/gzip archives and their per-file signatures.
