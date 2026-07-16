@@ -21,7 +21,7 @@
 */
 
 // NOTE: Full credit for this implementation goes to Michael S. Zick,
-// c.f., https://github.com/NiLuJe/KindleTool/pull/6 ;).
+// c.f., https://github.com/doyaGu/KindleTool/pull/6 ;).
 
 /*
    Byte sized look-up tables that implement the Amazon mangle algorithm.

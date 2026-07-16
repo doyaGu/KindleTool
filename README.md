@@ -1,5 +1,5 @@
 # KindleTool
-[![License](https://img.shields.io/github/license/NiLuJe/KindleTool.svg)](/LICENSE) [![Latest tag](https://img.shields.io/github/tag-date/NiLuJe/KindleTool.svg)](https://github.com/NiLuJe/KindleTool/releases/)
+[![License](https://img.shields.io/github/license/doyaGu/KindleTool.svg)](/LICENSE) [![Latest tag](https://img.shields.io/github/tag-date/doyaGu/KindleTool.svg)](https://github.com/doyaGu/KindleTool/releases/)
 
 KindleTool's mainline implementation is the safe Rust workspace in this repository root. It
 preserves the v1.6.6 package and CLI compatibility baseline while providing standalone Windows

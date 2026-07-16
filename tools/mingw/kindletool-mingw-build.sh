@@ -168,7 +168,7 @@ fi
 # Build KT package credits
 cat > ../../CREDITS << EOF
 * kindletool.exe: KindleTool, Copyright (C) 2011-2012 Yifan Lu & Copyright (C) 2012-2023 NiLuJe, licensed under the GNU General Public License version 3+ (http://www.gnu.org/licenses/gpl.html).
-(https://github.com/NiLuJe/KindleTool/)
+(https://github.com/doyaGu/KindleTool/)
 
   |->   zlib, Copyright (C) 1995-2018 Jean-loup Gailly and Mark Adler,
   |   Licensed under the zlib license (http://zlib.net/zlib_license.html)
