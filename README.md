@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/doyaGu/KindleTool/actions/workflows/ci.yml/badge.svg)](https://github.com/doyaGu/KindleTool/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/doyaGu/KindleTool)](https://github.com/doyaGu/KindleTool/releases/latest) [![License](https://img.shields.io/github/license/doyaGu/KindleTool.svg)](/LICENSE)
 
-KindleTool is a safe Rust library and command-line tool for Kindle update packages. Version 2.0 is
-an intentional interface break: it keeps the C v1.6.6 disk formats, but replaces the legacy CLI
-and the provisional Rust 1.7 API with a smaller, correctness-oriented interface.
+KindleTool is a safe Rust library and command-line tool for Kindle update packages. Version 2.0
+keeps the established v1.6.6 command line and disk formats while replacing the provisional Rust
+1.7 library API with a smaller, correctness-oriented interface.
 
 It recognizes FB01/FB02/FB03, FC02/FC04, FD03/FD04, FL01, SP01, CB01, gzip, and ZIP. The parser
 uses checked little-endian reads and contains no `unsafe`. Package rules come from one static Rust
@@ -27,28 +27,34 @@ Rust 1.85 or newer is required. The release binary is `target/release/kindletool
 ## CLI
 
 ```text
-kindletool inspect PACKAGE [--format human|json]
-kindletool verify PACKAGE [--policy structural|authentic] [--format human|json]
-kindletool extract PACKAGE DIRECTORY [--policy structural|authentic]
-kindletool export payload --view decoded|stored PACKAGE --output FILE
-kindletool export signature PACKAGE --output FILE
-kindletool export inner PACKAGE --output FILE
-kindletool create ota-v1|ota-v2|recovery-v1|recovery-v2|userdata ...
-kindletool codec mangle|demangle INPUT --output FILE
-kindletool serial SERIAL
+kindletool md [INPUT] [OUTPUT]
+kindletool dm [INPUT] [OUTPUT]
+kindletool convert [-ciksuw] INPUT...
+kindletool extract [-u] INPUT OUTPUT
+kindletool create ota|ota2|recovery|recovery2|sig [OPTIONS] INPUT... [OUTPUT]
+kindletool info SERIAL
+kindletool version
+kindletool help [COMMAND]
 ```
 
-Run `kindletool COMMAND --help` for format-specific create fields. Each command handles one
-package. `-` selects stdin or staged stdout where supported. Source packages are never deleted.
-`inspect` only parses. `verify` defaults to `authentic`; `extract` defaults to `structural`.
+The interface, short and long options, environment variables, default output names, and normal
+stdout/stderr behavior remain compatible with KindleTool 1.6.6/1.7. Run `kindletool help create`
+for the data-driven device, platform, board, magic, and certificate catalogs.
 
-Exit codes are stable: 0 for success/Accepted, 1 for Rejected, 2 for command-line usage errors,
-and 3 for execution errors. JSON output uses the checked-in
-[`schema_version: 1` schema](docs/kindletool-json-v1.schema.json).
+`convert` creates `<stem>_converted.tar.gz` and deletes the source after the output is validated,
+flushed, and atomically committed. `-k` keeps the source, `-c` writes staged stdout without deleting
+anything, `-i` prints package information, `-s` exports the SP01 signature, `-u` preserves stored
+payload bytes, and `-w` removes one SP01 envelope. A failure in any multi-input conversion makes
+the final exit status nonzero without preventing other inputs from being attempted.
 
-`KT_WITH_UNKNOWN_DEVCODES` enables data-mined device codes while expanding aliases. `TMPDIR`
-selects spooling storage. The removed legacy commands and environment behavior are listed in the
-[2.0 migration guide](docs/migration-2.0.md).
+`KT_WITH_UNKNOWN_DEVCODES` enables data-mined device codes while expanding aliases.
+`KT_PKG_METADATA_DUMP` writes shell-friendly `convert -i` metadata to the selected path. `TMPDIR`
+selects temporary storage. Command-line usage errors exit 2; successful commands exit 0 and
+execution failures exit 1.
+
+Authenticity and policy verification remain available through the public Rust API rather than a
+new, incompatible command surface. See the [2.0 migration guide](docs/migration-2.0.md) for the
+library-only break.
 
 ## Public Rust API
 
