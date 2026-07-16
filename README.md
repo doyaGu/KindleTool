@@ -1,9 +1,23 @@
 # KindleTool
-[![License](https://img.shields.io/github/license/doyaGu/KindleTool.svg)](/LICENSE) [![Latest tag](https://img.shields.io/github/tag-date/doyaGu/KindleTool.svg)](https://github.com/doyaGu/KindleTool/releases/)
+[![CI](https://github.com/doyaGu/KindleTool/actions/workflows/ci.yml/badge.svg)](https://github.com/doyaGu/KindleTool/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/doyaGu/KindleTool)](https://github.com/doyaGu/KindleTool/releases/latest) [![License](https://img.shields.io/github/license/doyaGu/KindleTool.svg)](/LICENSE)
 
 KindleTool's mainline implementation is the safe Rust workspace in this repository root. It
 preserves the v1.6.6 package and CLI compatibility baseline while providing standalone Windows
 x64, Linux x64 musl, macOS x64, and macOS ARM64 executables. Rust 1.85 or newer is required.
+
+## Downloads
+
+Standalone binaries are available from the [latest GitHub release](https://github.com/doyaGu/KindleTool/releases/latest).
+Download `SHA256SUMS` alongside the executable and verify it before use:
+
+```sh
+sha256sum --check SHA256SUMS
+```
+
+The desktop release includes Windows x64, Linux x64 musl, macOS x64, and macOS ARM64 builds.
+Kindle ARM binaries are intentionally not included.
+
+## Build from source
 
 ```sh
 cargo build --release --locked
