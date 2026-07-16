@@ -1,5 +1,5 @@
 # KindleTool
-[![License](https://img.shields.io/github/license/NiLuJe/KindleTool.svg)](/LICENSE) [![Codacy Badge](https://api.codacy.com/project/badge/Grade/15d7ef43d2e046f998668960d4a65ae6)](https://www.codacy.com/app/NiLuJe/KindleTool?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=NiLuJe/KindleTool&amp;utm_campaign=Badge_Grade) [![Latest tag](https://img.shields.io/github/tag-date/NiLuJe/KindleTool.svg)](https://github.com/NiLuJe/KindleTool/releases/)
+[![License](https://img.shields.io/github/license/NiLuJe/KindleTool.svg)](/LICENSE) [![Latest tag](https://img.shields.io/github/tag-date/NiLuJe/KindleTool.svg)](https://github.com/NiLuJe/KindleTool/releases/)
 
 KindleTool's mainline implementation is the safe Rust workspace in this repository root. It
 preserves the v1.6.6 package and CLI compatibility baseline while providing standalone Windows
