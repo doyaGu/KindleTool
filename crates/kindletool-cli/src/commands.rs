@@ -14,7 +14,7 @@ use kindletool::{
     FirmwareRange, FirmwareRevision, OtaV1Kind, OtaV1Spec, OtaV2Kind, OtaV2Spec, Package,
     PackageDescriptor, PackageEncoder, PackageHeader, PackageSpec, PayloadDigest, PayloadSource,
     PayloadView, Platform, RecoveryV1Kind, RecoveryV1Spec, RecoveryV2Spec, Result, SigningKey,
-    UserdataSpec,
+    UserdataSpec, VerificationContext, VerificationPolicy,
 };
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -221,7 +221,7 @@ fn convert_payload<R: Read, W: Write>(
 }
 
 fn extract(args: &ExtractArgs) -> Result<()> {
-    let package = Package::parse(File::open(&args.input)?)?;
+    let mut package = Package::parse(File::open(&args.input)?)?;
     let descriptor = package.descriptor().clone();
     eprintln!(
         "Extracting update package '{}' to '{}'.",
@@ -229,6 +229,19 @@ fn extract(args: &ExtractArgs) -> Result<()> {
         args.output.display()
     );
     eprint!("{}", render_package_info(&descriptor, false));
+    if !args.fake_sign {
+        let outcome = package.verify(
+            &VerificationContext::new(),
+            VerificationPolicy::structural(),
+        )?;
+        if !outcome.is_accepted() {
+            return Err(Error::ArchiveMismatch {
+                path: None,
+                expected: "structurally valid package and update archive".to_owned(),
+                actual: format!("{:?}", outcome.report()),
+            });
+        }
+    }
     let expected_hash = descriptor_md5(&descriptor);
     let mut payload = tempfile::tempfile()?;
     let view = if args.fake_sign {
