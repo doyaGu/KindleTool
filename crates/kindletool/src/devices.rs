@@ -27,6 +27,7 @@ impl fmt::Display for DeviceCode {
 
 /// Product family used to derive CLI aliases from the device catalog.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum DeviceFamily {
     /// Kindle 1 through Kindle 3 and unclassified identifiers.
     Legacy,

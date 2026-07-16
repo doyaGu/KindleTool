@@ -16,6 +16,7 @@ pub const SIGNATURE_HEADER_LEN: usize = 60;
 
 /// Recognized on-disk Kindle bundle magic.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
 pub enum BundleMagic {
     /// FB01 recovery bundle.
     Fb01,
@@ -119,6 +120,7 @@ impl FromStr for BundleMagic {
 
 /// Certificate selector stored by SP01.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Certificate {
     /// Developer certificate, 1024-bit signature.
     Developer,
@@ -519,6 +521,7 @@ impl OtaV2Header {
 
 /// OTA V1 wire variant selected for package creation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum OtaV1Kind {
     /// FC02 standard OTA package.
     Ota,
@@ -593,6 +596,7 @@ impl OtaV1Spec {
 
 /// OTA V2 wire variant selected for package creation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum OtaV2Kind {
     /// FC04 standard OTA package.
     Ota,
@@ -758,6 +762,7 @@ impl RecoveryV1Header {
 
 /// Legacy recovery wire variant selected for package creation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum RecoveryV1Kind {
     /// FB01 recovery package.
     Fb01,
@@ -1226,6 +1231,7 @@ impl PackageDescriptor {
 
 /// Strongly typed package creation specification.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum PackageSpec {
     /// Create OTA V1.
     OtaV1(OtaV1Spec),

@@ -73,6 +73,7 @@ impl<'key> EncodeOptions<'key> {
 
 /// Summary of one package encoding operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct EncodeReport {
     format: crate::PackageFormat,
     payload_bytes: u64,

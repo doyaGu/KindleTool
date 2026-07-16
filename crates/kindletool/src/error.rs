@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 /// Error type returned by the `KindleTool` library.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// An underlying I/O operation failed.
     #[error("I/O error: {0}")]

@@ -22,6 +22,9 @@ PackageHeader::{OtaV1, OtaV2, RecoveryV1, RecoveryV2, Component, Userdata, Andro
 SignatureEnvelope; Md5Digest; Sha256Digest; FirmwareRevision; FirmwareRange
 DeviceCode; DeviceCatalog; Platform; Board; Certificate; ArchivePath
 
+Extensible public enums and reports are #[non_exhaustive].
+ArchiveKind::block_size() -> u64
+
 VerificationPolicy::{structural, authentic}
 VerificationContext; VerificationLimits; ValidationOutcome; VerificationReport
 SignatureCheck; PayloadIntegrityCheck; ArchiveCheck; TargetCheck; TargetFieldCheck

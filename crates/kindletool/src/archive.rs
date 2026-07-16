@@ -80,6 +80,7 @@ impl Default for ArchiveOptions {
 
 /// Summary returned after building an update archive.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct ArchiveBuildReport {
     /// Number of source entries added, excluding generated signatures and the index.
     source_entries: usize,
@@ -109,6 +110,7 @@ impl ArchiveBuildReport {
 
 /// Summary returned after extracting an update archive.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct ArchiveExtractReport {
     /// Number of archive entries extracted.
     entries: usize,
