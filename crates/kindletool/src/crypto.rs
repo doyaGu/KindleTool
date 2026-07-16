@@ -1,12 +1,12 @@
 use crate::model::Certificate;
 use crate::{Error, Result};
 use md5::Md5;
-use rsa::pkcs1::DecodeRsaPrivateKey;
+use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey};
 use rsa::pkcs1v15;
-use rsa::pkcs8::DecodePrivateKey;
-use rsa::signature::{DigestSigner, SignatureEncoding};
+use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
+use rsa::signature::{DigestSigner, DigestVerifier, SignatureEncoding};
 use rsa::traits::PublicKeyParts;
-use rsa::{BigUint, RsaPrivateKey};
+use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs;
@@ -19,6 +19,12 @@ include!("key_generated.rs");
 #[derive(Clone)]
 pub struct SigningKey {
     inner: RsaPrivateKey,
+}
+
+/// RSA public key used to verify Kindle SP01 signatures.
+#[derive(Clone)]
+pub struct VerificationKey {
+    inner: RsaPublicKey,
 }
 
 impl fmt::Debug for SigningKey {
@@ -61,6 +67,14 @@ impl SigningKey {
     #[must_use]
     pub fn size(&self) -> usize {
         self.inner.size()
+    }
+
+    /// Return the public half of this signing key.
+    #[must_use]
+    pub fn verification_key(&self) -> VerificationKey {
+        VerificationKey {
+            inner: RsaPublicKey::from(&self.inner),
+        }
     }
 
     /// Ensure that this key matches the selected Kindle certificate slot.
@@ -110,12 +124,64 @@ impl SigningKey {
     }
 }
 
+impl fmt::Debug for VerificationKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerificationKey")
+            .field("bits", &self.inner.n().bits())
+            .finish_non_exhaustive()
+    }
+}
+
+impl VerificationKey {
+    /// Load a PKCS#1 or `SubjectPublicKeyInfo` PEM public key.
+    pub fn from_pem(pem: &str) -> Result<Self> {
+        let key = RsaPublicKey::from_pkcs1_pem(pem)
+            .or_else(|_| RsaPublicKey::from_public_key_pem(pem))
+            .map_err(|error| Error::Rsa(error.to_string()))?;
+        if !matches!(key.size(), 128 | 256) {
+            return Err(Error::Rsa(format!(
+                "RSA key is {} bytes; KindleTool supports only 128 or 256",
+                key.size()
+            )));
+        }
+        Ok(Self { inner: key })
+    }
+
+    /// Load a PKCS#1 or `SubjectPublicKeyInfo` PEM public key from a file.
+    pub fn from_pem_file(path: impl AsRef<Path>) -> Result<Self> {
+        let pem = fs::read_to_string(path)?;
+        Self::from_pem(&pem)
+    }
+
+    /// RSA modulus length in bytes.
+    #[must_use]
+    pub fn size(&self) -> usize {
+        self.inner.size()
+    }
+
+    pub(crate) fn verify_reader<R: Read>(&self, mut reader: R, signature: &[u8]) -> Result<bool> {
+        let mut digest = Sha256::new();
+        copy_into_digest(&mut reader, &mut digest)?;
+        let Ok(signature) = pkcs1v15::Signature::try_from(signature) else {
+            return Ok(false);
+        };
+        let verifying_key = pkcs1v15::VerifyingKey::<Sha256>::new(self.inner.clone());
+        Ok(verifying_key.verify_digest(digest, &signature).is_ok())
+    }
+}
+
 /// Calculate lowercase hexadecimal MD5 for a stream and rewind it.
 pub fn md5_hex<R: Read + Seek>(reader: &mut R) -> Result<String> {
     reader.seek(SeekFrom::Start(0))?;
-    let mut digest = Md5::new();
-    copy_into_digest(reader, &mut digest)?;
+    let result = md5_hex_reader(&mut *reader)?;
     reader.seek(SeekFrom::Start(0))?;
+    Ok(result)
+}
+
+pub(crate) fn md5_hex_reader<R: Read>(mut reader: R) -> Result<String> {
+    let mut digest = Md5::new();
+    copy_into_digest(&mut reader, &mut digest)?;
     Ok(format!("{:x}", digest.finalize()))
 }
 
@@ -182,9 +248,13 @@ mod tests {
         assert_eq!(key.size(), 256);
         key.validate_certificate(Certificate::Production2K).unwrap();
         assert!(key.validate_certificate(Certificate::Developer).is_err());
-        assert_eq!(
-            key.sign(&mut Cursor::new(b"external key")).unwrap().len(),
-            256
+        let message = b"external key";
+        let signature = key.sign(&mut Cursor::new(message)).unwrap();
+        assert_eq!(signature.len(), 256);
+        assert!(
+            key.verification_key()
+                .verify_reader(Cursor::new(message), &signature)
+                .unwrap()
         );
         let pkcs1 = rsa.to_pkcs1_pem(LineEnding::LF).unwrap();
         assert_eq!(SigningKey::from_pem(pkcs1.as_str()).unwrap().size(), 256);

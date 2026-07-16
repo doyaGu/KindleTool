@@ -45,7 +45,7 @@ pub enum Error {
         /// Digest calculated from the decoded payload.
         actual: String,
     },
-    /// RSA key parsing, validation, or signing failed.
+    /// RSA key parsing, validation, signing, or verification setup failed.
     #[error("RSA error: {0}")]
     Rsa(String),
 }

@@ -22,7 +22,7 @@
 pub mod archive;
 /// Amazon byte obfuscation codecs.
 pub mod codec;
-/// Hashing and local RSA signing.
+/// Hashing and RSA signing and verification.
 pub mod crypto;
 /// Kindle device catalog and serial-number encoding.
 pub mod devices;
@@ -35,12 +35,14 @@ pub mod package;
 pub mod report;
 /// Kindle serial-number model and password derivation.
 pub mod serial;
+/// Typed package verification policies and results.
+pub mod verification;
 
 pub use archive::{
     ArchiveBuildReport, ArchiveExtractReport, ArchiveOptions, UpdateArchiveBuilder, extract_archive,
 };
 pub use codec::{DemangleReader, DemangleWriter, MangleReader, MangleWriter};
-pub use crypto::SigningKey;
+pub use crypto::{SigningKey, VerificationKey};
 pub use devices::{DeviceCatalog, DeviceCode, DeviceFamily, DeviceRecord};
 pub use error::{Error, Result};
 pub use model::{
@@ -49,3 +51,7 @@ pub use model::{
     SignatureEnvelope,
 };
 pub use package::{PackageReader, PackageWriter, ParseOptions, SigningConfiguration, WriteOptions};
+pub use verification::{
+    DeviceCompatibilityStatus, PayloadIntegrityStatus, SignatureStatus, SignatureVerification,
+    VerificationOptions, VerificationReport,
+};

@@ -1,10 +1,14 @@
-use crate::codec::{copy_demangled, copy_mangled, demangle, mangle};
-use crate::crypto::{SigningKey, md5_hex};
+use crate::codec::{DemangleReader, copy_demangled, copy_mangled, demangle, mangle};
+use crate::crypto::{SigningKey, VerificationKey, md5_hex, md5_hex_reader};
 use crate::devices::DeviceCode;
 use crate::model::{
     Board, BundleMagic, Certificate, ComponentHeader, OTA_V1_HEADER_LEN, OtaV1Header, OtaV2Header,
     PackageHeader, PackageInfo, PackageSpec, Platform, RECOVERY_HEADER_LEN, RecoveryV1Header,
     RecoveryV1Spec, RecoveryV2Header, SIGNATURE_HEADER_LEN, SignatureEnvelope,
+};
+use crate::verification::{
+    PayloadIntegrityStatus, SignatureStatus, SignatureVerification, VerificationOptions,
+    VerificationReport, device_compatibility,
 };
 use crate::{Error, Result};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -54,6 +58,7 @@ pub struct WriteOptions<'key> {
 pub struct PackageReader<R> {
     reader: R,
     info: PackageInfo,
+    payload_consumed: bool,
 }
 
 impl<R: Read> PackageReader<R> {
@@ -107,6 +112,7 @@ impl<R: Read> PackageReader<R> {
                 envelope,
                 raw_inner_header: encoded_inner_header,
             },
+            payload_consumed: false,
         })
     }
 
@@ -131,11 +137,18 @@ impl<R: Read> PackageReader<R> {
         match self.info.header {
             PackageHeader::Android => Err(Error::Unsupported("Android ZIP conversion")),
             PackageHeader::Userdata { magic } => {
+                self.payload_consumed = true;
                 writer.write_all(&magic)?;
                 Ok(4 + io::copy(&mut self.reader, &mut writer)?)
             }
-            _ if fake_sign => Ok(io::copy(&mut self.reader, &mut writer)?),
-            _ => Ok(copy_demangled(&mut self.reader, &mut writer)?),
+            _ if fake_sign => {
+                self.payload_consumed = true;
+                Ok(io::copy(&mut self.reader, &mut writer)?)
+            }
+            _ => {
+                self.payload_consumed = true;
+                Ok(copy_demangled(&mut self.reader, &mut writer)?)
+            }
         }
     }
 
@@ -144,6 +157,7 @@ impl<R: Read> PackageReader<R> {
         if self.info.envelope.is_none() {
             return Err(Error::Unsupported("package is not wrapped in SP01"));
         }
+        self.payload_consumed = true;
         writer.write_all(&self.info.raw_inner_header)?;
         Ok(self.info.raw_inner_header.len() as u64 + io::copy(&mut self.reader, &mut writer)?)
     }
@@ -158,6 +172,103 @@ impl<R: Read> PackageReader<R> {
         writer.write_all(&envelope.signature)?;
         Ok(envelope.signature.len())
     }
+}
+
+impl<R: Read + Seek> PackageReader<R> {
+    /// Verify the package signature and payload digest while preserving the stream position.
+    ///
+    /// This must be called before [`Self::copy_decoded_payload`] or [`Self::copy_unwrapped`].
+    pub fn verify(&mut self, options: VerificationOptions<'_>) -> Result<VerificationReport> {
+        let signature = self.verify_signature(options.signature_key)?;
+        let payload_integrity = self.verify_payload_integrity()?;
+        let device_compatibility = device_compatibility(&self.info.header, options.target_device);
+        Ok(VerificationReport {
+            signature,
+            payload_integrity,
+            device_compatibility,
+        })
+    }
+
+    /// Check the decoded payload against the MD5 stored in the package header.
+    ///
+    /// This must be called before [`Self::copy_decoded_payload`] or [`Self::copy_unwrapped`].
+    pub fn verify_payload_integrity(&mut self) -> Result<PayloadIntegrityStatus> {
+        self.ensure_payload_unread()?;
+        let Some(expected) = self.info.header.payload_hash().map(str::to_owned) else {
+            return Ok(PayloadIntegrityStatus::NotAvailable);
+        };
+        let actual = with_preserved_position(&mut self.reader, |reader| {
+            md5_hex_reader(DemangleReader::new(reader))
+        })?;
+        if actual.eq_ignore_ascii_case(&expected) {
+            Ok(PayloadIntegrityStatus::Valid)
+        } else {
+            Ok(PayloadIntegrityStatus::Invalid { expected, actual })
+        }
+    }
+
+    /// Verify the outer SP01 signature while preserving the current stream position.
+    ///
+    /// This must be called before [`Self::copy_decoded_payload`] or [`Self::copy_unwrapped`].
+    pub fn verify_signature(
+        &mut self,
+        key: Option<&VerificationKey>,
+    ) -> Result<SignatureVerification> {
+        self.ensure_payload_unread()?;
+        let Some(envelope) = self.info.envelope.as_ref() else {
+            return Ok(SignatureVerification {
+                status: SignatureStatus::Unsigned,
+                certificate: None,
+            });
+        };
+        let Some(key) = key else {
+            return Ok(SignatureVerification {
+                status: SignatureStatus::KeyMissing,
+                certificate: Some(envelope.certificate),
+            });
+        };
+        if key.size() != envelope.certificate.signature_len() {
+            return Ok(SignatureVerification {
+                status: SignatureStatus::KeyMismatch,
+                certificate: Some(envelope.certificate),
+            });
+        }
+
+        let verification = with_preserved_position(&mut self.reader, |reader| {
+            let signed_bytes =
+                std::io::Cursor::new(self.info.raw_inner_header.as_slice()).chain(reader);
+            key.verify_reader(signed_bytes, &envelope.signature)
+        })?;
+        let status = if verification {
+            SignatureStatus::Valid
+        } else {
+            SignatureStatus::Invalid
+        };
+        Ok(SignatureVerification {
+            status,
+            certificate: Some(envelope.certificate),
+        })
+    }
+
+    fn ensure_payload_unread(&self) -> Result<()> {
+        if self.payload_consumed {
+            return Err(Error::InvalidField {
+                field: "payload position",
+                message: "verification must run before copying the payload".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn with_preserved_position<R: Seek, T>(
+    reader: &mut R,
+    operation: impl FnOnce(&mut R) -> Result<T>,
+) -> Result<T> {
+    let position = reader.stream_position()?;
+    let result = operation(reader);
+    reader.seek(SeekFrom::Start(position))?;
+    result
 }
 
 /// Streaming Kindle package writer.
@@ -734,7 +845,10 @@ impl<'input> ByteCursor<'input> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PackageReader, PackageWriter, ParseOptions, SigningConfiguration, WriteOptions};
+    use super::{
+        PackageReader, PackageWriter, ParseOptions, PayloadIntegrityStatus, SigningConfiguration,
+        WriteOptions,
+    };
     use crate::crypto::SigningKey;
     use crate::devices::DeviceCode;
     use crate::model::{
@@ -826,6 +940,10 @@ mod tests {
                 .unwrap();
             let mut reader = PackageReader::new(Cursor::new(package)).unwrap();
             assert_eq!(reader.info().header.magic(), expected_magic);
+            assert_eq!(
+                reader.verify_payload_integrity().unwrap(),
+                PayloadIntegrityStatus::Valid
+            );
             let mut decoded = Vec::new();
             reader.copy_decoded_payload(&mut decoded, false).unwrap();
             assert_eq!(decoded, payload);
