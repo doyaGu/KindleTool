@@ -63,6 +63,19 @@ jobs:
           manifest-path: Cargo.toml
           command: check
 
+  public-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Check additive KindleTool library changes
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: kindletool
+          baseline-rev: v2.0.0
+          release-type: patch
+
   fuzz-smoke:
     runs-on: ubuntu-latest
     steps:
@@ -74,3 +87,5 @@ jobs:
           cargo +nightly fuzz run package_reader -- -max_total_time=20
           cargo +nightly fuzz run archive_path -- -max_total_time=20
           cargo +nightly fuzz run manifest_verifier -- -max_total_time=20
+          cargo +nightly fuzz run raw_archive -- -max_total_time=20
+          cargo +nightly fuzz run encoder_roundtrip -- -max_total_time=20

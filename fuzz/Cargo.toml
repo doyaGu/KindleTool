@@ -33,3 +33,17 @@ path = "fuzz_targets/manifest_verifier.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "raw_archive"
+path = "fuzz_targets/raw_archive.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "encoder_roundtrip"
+path = "fuzz_targets/encoder_roundtrip.rs"
+test = false
+doc = false
+bench = false
