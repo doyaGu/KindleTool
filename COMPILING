@@ -1,50 +1,44 @@
 Recommended Compilation Directions
 
-Basically, you'll need a working toolchain, nettle, and libarchive >= 3.0.3 (with gzip support).
+Rust mainline
+-------------
 
-If you don't want to bother, static binaries are available:
-here for the latest releases: http://www.mobileread.com/forums/showthread.php?t=187880
-and here for the latest development snapshots, which are most likely the builds you'll be interested in: http://www.mobileread.com/forums/showthread.php?t=225030
+KindleTool uses Rust 2024 with an MSRV of 1.85. The mainline build has no external C library
+dependencies. From the repository root:
 
-To compile for Linux:
-	1) Install the required (development) dependencies in the appropriate manner for your distro (i.e., use your PMS).
-	1.5) For Debian/Ubuntu people: You'll need zlib1g-dev, libarchive-dev and nettle-dev
-	1.5) For Fedora people: You'll need zlib-devel, libarchive-devel and nettle-devel
-	1.5) For OpenSuse people: You'll need zlib-devel, libarchive-devel and libnettle-devel
-	2) Compile using "make" in the tool's directory
-	3) If you want to install it in /usr/local, run "make install". (I'd recommend using this through the checkinstall tool on Debian/Ubuntu).
-	2.5) If GCC throws a fit about libarchive, or if it fails to link with a bunch of undefined references to archive_* symbols, your libarchive version is too old.
-		You'll have to build it manually (get the latest 3.x release from http://libarchive.github.com/).
-		See https://github.com/NiLuJe/KindleTool/issues/1 for more details. Or try using the simple-linux-static-build.sh script in the tools folder.
+	cargo build --release --locked
+	cargo test --workspace --locked
+	cargo fmt --all -- --check
+	cargo clippy --workspace --all-targets --locked -- -D warnings
 
-Fellow Gentoo users, there's a portage overlay over on https://github.com/NiLuJe/gentoo-kindletool, enjoy ;).
+The release executable is target/release/kindletool (kindletool.exe on Windows). The root Makefile
+provides equivalent entry points:
 
-To compile for OSX:
-	1) If you're using Homebrew, see https://github.com/NiLuJe/homebrew-kindletool
+	make             Release build
+	make debug       Development build
+	make test        Workspace tests
+	make check       Formatting, Clippy, and tests
+	make install     Install the Rust CLI with Cargo
 
-To compile for Windows:
-	Native)
-		You can build a native version with a MinGW-w64 toolchain.
-		On a native MinGW+MSYS toolchain, you'll probably have to tweak the Makefile, but it should handle a Linux cross toolchain properly with the mingw target ;).
-		Check the tools/mingw directory for more details.
+Release CI publishes Windows x64, Linux x64 musl, macOS x64, and macOS ARM64 executables. Kindle
+ARM targets are intentionally outside this desktop release.
 
-	Cygwin)
-		1) Get Cygwin
-		2) Install the required packages for a proper toolchain (gcc, binutils, autoconf, automake, libtool, make, ...)
-		3) Install the packages: zlib / zlib-devel, libarchive13 / libarchive-devel, libnettle4 / libnettle-devel, git, cmake, patch, pkg-config, libxml2-devel
-		5) Compile using "make" in the tool's directory
-		6) Install it by running "make install"
+Legacy C oracle
+---------------
 
-	Visual Studio 2022+)
-		A native MSVC build is available through CMake and vcpkg.
-		1) Install: vcpkg install libarchive:x64-windows nettle:x64-windows gmp:x64-windows zlib:x64-windows
-		2) Set VCPKG_ROOT to the vcpkg checkout directory.
-		3) Run: cmake --preset vs2022-x64
-		4) Run: cmake --build --preset vs2022-x64-release
-		The executable is written below out/build/vs2022-x64/Release.
-		Visual Studio can also open this repository folder and select the vs2022-x64 CMake preset.
+The C 1.6.6 implementation remains available for compatibility verification. It requires nettle,
+libarchive >= 3.0.3 with gzip support, and zlib. Build it explicitly with:
 
+	make legacy
 
-----
+Other preserved targets are legacy-kindle, legacy-mingw, legacy-debug, legacy-strip,
+legacy-clean, legacy-install, and legacy-format.
 
-If you need more complex examples, the various scripts found in the tools directory are what I personally use.
+For a native Visual Studio 2022 build, install libarchive, nettle, gmp, and zlib through vcpkg,
+set VCPKG_ROOT, then run:
+
+	cmake --preset vs2022-x64
+	cmake --build --preset vs2022-x64-release
+
+The native C executable is written to out/build/vs2022-x64/Release. The older static-build and
+cross-compilation helpers under tools/ continue to target the legacy C implementation.

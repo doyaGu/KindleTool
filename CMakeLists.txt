@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
-project(KindleTool VERSION 1.6.6 LANGUAGES C)
+# Legacy C compatibility oracle. The mainline implementation is the root Cargo workspace.
+project(KindleToolLegacy VERSION 1.6.6 LANGUAGES C)
 
 option(KINDLETOOL_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 

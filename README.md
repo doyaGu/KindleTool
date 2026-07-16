@@ -1,16 +1,50 @@
 # KindleTool
 [![License](https://img.shields.io/github/license/NiLuJe/KindleTool.svg)](/LICENSE) [![Codacy Badge](https://api.codacy.com/project/badge/Grade/15d7ef43d2e046f998668960d4a65ae6)](https://www.codacy.com/app/NiLuJe/KindleTool?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=NiLuJe/KindleTool&amp;utm_campaign=Badge_Grade) [![Latest tag](https://img.shields.io/github/tag-date/NiLuJe/KindleTool.svg)](https://github.com/NiLuJe/KindleTool/releases/)
 
-KindleTool's default desktop release is now the safe Rust implementation in [`rust/`](rust/README.md).
-It preserves the v1.6.6 package and CLI compatibility baseline while providing standalone
-Windows x64, Linux x64 musl, macOS x64, and macOS ARM64 executables. Build it with:
+KindleTool's mainline implementation is the safe Rust workspace in this repository root. It
+preserves the v1.6.6 package and CLI compatibility baseline while providing standalone Windows
+x64, Linux x64 musl, macOS x64, and macOS ARM64 executables. Rust 1.85 or newer is required.
 
 ```sh
-cd rust
 cargo build --release --locked
+cargo test --workspace --locked
 ```
 
-The existing C implementation remains frozen in place as the legacy differential-test oracle.
+The executable is `target/release/kindletool` (`kindletool.exe` on Windows). The `kindletool`
+library crate exposes typed package readers, writers, archive builders, device catalogs, and
+signing APIs; the `kindletool-cli` crate provides the compatible executable. Project code forbids
+`unsafe`, and gzip uses the pure-Rust `flate2` backend.
+
+The C implementation remains in [`KindleTool/`](KindleTool/) as the legacy differential-test
+oracle. Build it explicitly with `make legacy`; the root `make` target builds Rust.
+
+### Public Rust API
+
+```rust
+use kindletool::{PackageReader, Result};
+use std::fs::File;
+
+fn inspect(path: &str) -> Result<()> {
+    let package = PackageReader::new(File::open(path)?)?;
+    println!("{}", package.info().header.magic());
+    Ok(())
+}
+```
+
+`PackageSpec` represents only valid OTA V1, OTA V2, recovery V1, recovery V2, and signed-userdata
+combinations. `SigningKey` accepts 1024/2048-bit PKCS#1 or PKCS#8 PEM keys without exposing the
+underlying cryptography crate. Safe extraction validates complete archives in private staging and
+atomically commits them to absent or empty destinations.
+
+### Compatibility verification
+
+Set `KINDLETOOL_C_ORACLE` to a C 1.6.6 executable to enable the bidirectional differential matrix:
+
+```sh
+make legacy
+KINDLETOOL_C_ORACLE=KindleTool/Release/kindletool \
+  cargo test -p kindletool-cli --test oracle --locked
+```
 
 ## Usage
 -   KindleTool md [ &lt;<b>input</b>&gt; ] [ &lt;<b>output</b>&gt; ]
@@ -124,6 +158,7 @@ The existing C implementation remains frozen in place as the legacy differential
 
 ### Building
 
-See [COMPILING](/COMPILING).
+Run `cargo build --release --locked` or simply `make`. See [COMPILING](/COMPILING) for the complete
+Rust and legacy C build targets.
 
 <!-- kate: indent-mode cstyle; indent-width 4; replace-tabs on; remove-trailing-spaces none; -->

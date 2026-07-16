@@ -1,51 +1,29 @@
 {
-  stdenv,
   lib,
-  pkg-config,
-  hostname,
-  libarchive,
-  nettle,
-  zlib,
+  rustPlatform,
 }:
 
-stdenv.mkDerivation {
-  name = "kindletool";
+rustPlatform.buildRustPackage {
+  pname = "kindletool";
+  version = "1.6.6";
   src = lib.cleanSource ./.;
 
-  nativeBuildInputs = [
-    pkg-config
-    hostname
+  cargoLock.lockFile = ./Cargo.lock;
+  cargoBuildFlags = [
+    "--package"
+    "kindletool-cli"
   ];
+  cargoTestFlags = [ "--workspace" ];
 
-  buildInputs = [
-    libarchive
-    nettle
-    zlib
-  ];
-
-  buildPhase = ''
-    runHook preBuild
-
-    make -C KindleTool all
-
-    runHook postBuild
-  '';
-
-  installPhase = ''
-    runHook preInstall
-
-    mkdir -p $out/bin
-    mkdir -p $out/share/man/man1
-    install -m 755 KindleTool/Release/kindletool $out/bin/kindletool
-    install -m 644 KindleTool/kindletool.1 $out/share/man/man1/kindletool.1
-
-    runHook postInstall
+  postInstall = ''
+    install -Dm644 kindletool.1 $out/share/man/man1/kindletool.1
   '';
 
   meta = with lib; {
-    homepage = "https://github.com/NiLuJe/KindleTool";
-    description = "A tool for creating & extracting Kindle updates and more";
-    license = licenses.gpl3;
-    platforms = platforms.all;
+    homepage = "https://github.com/doyaGu/KindleTool";
+    description = "Create, inspect, convert, and safely extract Kindle update packages";
+    license = licenses.gpl3Plus;
+    mainProgram = "kindletool";
+    platforms = platforms.unix;
   };
 }

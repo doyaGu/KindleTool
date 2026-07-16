@@ -8,6 +8,12 @@ KindleTool.xcodeproj/xcuserdata
 # Nix Build Output
 result
 
+# Rust build and fuzz output
+/target/
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/
+
 # CMake and vcpkg local build output
-out/
-vcpkg_installed/
+/out/
+/vcpkg_installed/

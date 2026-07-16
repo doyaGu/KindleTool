@@ -1,29 +1,56 @@
-# Toplevel Makefile, all the fun stuff happens in KindleTool/Makefile ;)
+# Rust is the main implementation. The C implementation remains available as the legacy oracle.
+
+CARGO ?= cargo
+CARGO_FLAGS ?= --locked
 
 default: all
 
 all:
-	$(MAKE) -C KindleTool all
-
-kindle:
-	$(MAKE) -C KindleTool kindle
-
-mingw:
-	$(MAKE) -C KindleTool mingw
+	$(CARGO) build --release $(CARGO_FLAGS) -p kindletool-cli
 
 debug:
-	$(MAKE) -C KindleTool debug
+	$(CARGO) build $(CARGO_FLAGS) -p kindletool-cli
 
-strip:
-	$(MAKE) -C KindleTool strip
+test:
+	$(CARGO) test --workspace $(CARGO_FLAGS)
 
-clean:
-	$(MAKE) -C KindleTool clean
-
-install:
-	$(MAKE) -C KindleTool install
+check:
+	$(CARGO) fmt --all -- --check
+	$(CARGO) clippy --workspace --all-targets $(CARGO_FLAGS) -- -D warnings
+	$(CARGO) test --workspace $(CARGO_FLAGS)
 
 format:
-	 clang-format -style=file -i KindleTool/*.c KindleTool/*.h
+	$(CARGO) fmt --all
 
-.PHONY: default all kindle mingw debug strip clean install format
+clean:
+	$(CARGO) clean
+
+install:
+	$(CARGO) install --path crates/kindletool-cli $(CARGO_FLAGS)
+
+legacy:
+	$(MAKE) -C KindleTool all
+
+legacy-kindle:
+	$(MAKE) -C KindleTool kindle
+
+legacy-mingw:
+	$(MAKE) -C KindleTool mingw
+
+legacy-debug:
+	$(MAKE) -C KindleTool debug
+
+legacy-strip:
+	$(MAKE) -C KindleTool strip
+
+legacy-clean:
+	$(MAKE) -C KindleTool clean
+
+legacy-install:
+	$(MAKE) -C KindleTool install
+
+legacy-format:
+	clang-format -style=file -i KindleTool/*.c KindleTool/*.h
+
+.PHONY: default all debug test check format clean install legacy legacy-kindle legacy-mingw \
+	legacy-debug legacy-strip legacy-clean legacy-install legacy-format

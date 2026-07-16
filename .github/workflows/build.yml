@@ -19,22 +19,18 @@ jobs:
         run: rustup component add rustfmt clippy
 
       - name: Formatting
-        working-directory: rust
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        working-directory: rust
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Tests and documentation
-        working-directory: rust
         run: |
           cargo test --workspace --locked
           cargo test --doc --workspace --locked
-          RUSTDOCFLAGS="-D warnings" cargo doc -p kindletool --no-deps --document-private-items
+          RUSTDOCFLAGS="-D warnings" cargo doc -p kindletool --no-deps --document-private-items --locked
 
       - name: MSRV
-        working-directory: rust
         run: |
           rustup toolchain install 1.85.0 --profile minimal
           cargo +1.85.0 test --workspace --locked
@@ -43,21 +39,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libarchive-dev nettle-dev zlib1g-dev
-          make
+          make legacy
 
       - name: Full bidirectional differential matrix
-        working-directory: rust
         run: cargo test -p kindletool-cli --test oracle --locked
         env:
           KINDLETOOL_C_ORACLE: ${{ github.workspace }}/KindleTool/Release/kindletool
 
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          manifest-path: rust/Cargo.toml
+          manifest-path: Cargo.toml
           command: check
 
       - name: Parser fuzz smoke test
-        working-directory: rust
         run: |
           rustup toolchain install nightly --profile minimal
           cargo +nightly install cargo-fuzz --locked
@@ -99,13 +93,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build standalone executable
-        working-directory: rust
         run: cargo build --release --locked --target ${{ matrix.target }} -p kindletool-cli
 
       - name: Stage release asset
         shell: bash
         run: |
-          cp "rust/target/${{ matrix.target }}/release/${{ matrix.binary }}" "${{ matrix.asset }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "${{ matrix.asset }}"
           chmod +x "${{ matrix.asset }}" || true
 
       - uses: actions/upload-artifact@v6
