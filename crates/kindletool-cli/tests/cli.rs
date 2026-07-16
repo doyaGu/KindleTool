@@ -1,7 +1,13 @@
 //! End-to-end tests for CLI safety and compatibility behavior.
 
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use kindletool::{
+    DeviceCode, EncodeOptions, FirmwareRange, FirmwareRevision, OtaV2Kind, OtaV2Spec,
+    PackageEncoder, PackageSpec, PayloadSource,
+};
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -41,6 +47,65 @@ fn corrupt_last_byte(path: &Path) {
     file.read_exact(&mut byte).unwrap();
     file.seek(SeekFrom::End(-1)).unwrap();
     file.write_all(&[byte[0] ^ 0xFF]).unwrap();
+}
+
+fn invalid_archive_package(path: &Path) {
+    let mut archive = Vec::new();
+    let encoder = GzEncoder::new(&mut archive, Compression::default());
+    let mut tar = tar::Builder::new(encoder);
+    append_tar_file(&mut tar, "payload.bin", b"payload");
+    append_tar_file(&mut tar, "payload.bin.sig", &[0; 128]);
+    append_tar_file(&mut tar, "update-filelist.dat.sig", &[0; 128]);
+    append_tar_file(
+        &mut tar,
+        "update-filelist.dat",
+        b"128 00000000000000000000000000000000 payload.bin 0 payload.bin_ktool_file\n",
+    );
+    tar.finish().unwrap();
+    tar.into_inner().unwrap().finish().unwrap();
+
+    let revisions =
+        FirmwareRange::new(FirmwareRevision::new(0), FirmwareRevision::new(u64::MAX)).unwrap();
+    let spec = PackageSpec::OtaV2(
+        OtaV2Spec::new(
+            OtaV2Kind::Ota,
+            revisions,
+            vec![DeviceCode(0x201)],
+            0,
+            vec![],
+        )
+        .unwrap(),
+    );
+    let mut output = File::create(path).unwrap();
+    PackageEncoder::encode(
+        &spec,
+        Cursor::new(archive),
+        &mut output,
+        EncodeOptions::unsigned(PayloadSource::Decoded),
+    )
+    .unwrap();
+}
+
+fn userdata_archive() -> Vec<u8> {
+    let mut archive = Vec::new();
+    let encoder = GzEncoder::new(&mut archive, Compression::default());
+    let mut tar = tar::Builder::new(encoder);
+    append_tar_file(&mut tar, "payload.bin", b"payload");
+    tar.finish().unwrap();
+    tar.into_inner().unwrap().finish().unwrap();
+    archive
+}
+
+fn append_tar_file<W: Write>(tar: &mut tar::Builder<W>, path: &str, data: &[u8]) {
+    let mut header = tar::Header::new_gnu();
+    header.set_mode(0o644);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(0);
+    header.set_size(data.len() as u64);
+    header.set_cksum();
+    tar.append_data(&mut header, path, Cursor::new(data))
+        .unwrap();
 }
 
 #[test]
@@ -174,11 +239,7 @@ fn create_inspect_extract_and_convert_are_atomic() {
 fn one_failed_input_makes_multi_convert_fail_without_stopping_other_inputs() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("bad.bin"), b"not a package").unwrap();
-    fs::write(
-        temporary.path().join("plain.stgz"),
-        b"\x1F\x8B\x08\x00payload",
-    )
-    .unwrap();
+    fs::write(temporary.path().join("plain.stgz"), userdata_archive()).unwrap();
     let output = run(temporary.path(), &["convert", "bad.bin", "plain.stgz"]);
     assert!(!output.status.success());
     assert!(temporary.path().join("bad.bin").exists());
@@ -189,14 +250,11 @@ fn one_failed_input_makes_multi_convert_fail_without_stopping_other_inputs() {
 #[test]
 fn stdout_conversion_never_deletes_the_source() {
     let temporary = tempfile::tempdir().unwrap();
-    fs::write(
-        temporary.path().join("plain.stgz"),
-        b"\x1F\x8B\x08\x00payload",
-    )
-    .unwrap();
+    let archive = userdata_archive();
+    fs::write(temporary.path().join("plain.stgz"), &archive).unwrap();
     let output = run(temporary.path(), &["convert", "-c", "plain.stgz"]);
     assert!(output.status.success());
-    assert_eq!(output.stdout, b"\x1F\x8B\x08\x00payload");
+    assert_eq!(output.stdout, archive);
     assert!(temporary.path().join("plain.stgz").exists());
     assert!(!temporary.path().join("plain_converted.tar.gz").exists());
 }
@@ -214,6 +272,24 @@ fn stdout_conversion_rejects_a_corrupt_payload_before_writing() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(package.exists());
+}
+
+#[test]
+fn conversion_rejects_an_invalid_archive_without_deleting_the_source() {
+    let temporary = tempfile::tempdir().unwrap();
+    let package = temporary.path().join("Update_invalid_archive.bin");
+    invalid_archive_package(&package);
+
+    let output = run(temporary.path(), &["convert", "Update_invalid_archive.bin"]);
+
+    assert!(!output.status.success());
+    assert!(package.exists());
+    assert!(
+        !temporary
+            .path()
+            .join("Update_invalid_archive_converted.tar.gz")
+            .exists()
+    );
 }
 
 #[test]

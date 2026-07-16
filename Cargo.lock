@@ -327,7 +327,9 @@ name = "kindletool-cli"
 version = "2.0.0"
 dependencies = [
  "clap",
+ "flate2",
  "kindletool",
+ "tar",
  "tempfile",
 ]
 

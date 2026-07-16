@@ -2,8 +2,8 @@ use crate::args::{
     Command, ConvertArgs, CreateArgs, CreateType, ExtractArgs, HelpArgs, TransformArgs,
 };
 use kindletool::archive::{
-    ArchiveInput, ArchiveOptions, OTA_BLOCK_SIZE, RECOVERY_BLOCK_SIZE, UpdateArchiveBuilder,
-    extract_archive,
+    ArchiveInput, ArchiveOptions, ComponentContentCheck, OTA_BLOCK_SIZE, RECOVERY_BLOCK_SIZE,
+    UpdateArchiveBuilder, UpdateArchiveVerifier, extract_archive,
 };
 use kindletool::codec::{copy_demangled, copy_mangled};
 use kindletool::crypto::md5_hex;
@@ -14,7 +14,7 @@ use kindletool::{
     FirmwareRange, FirmwareRevision, OtaV1Kind, OtaV1Spec, OtaV2Kind, OtaV2Spec, Package,
     PackageDescriptor, PackageEncoder, PackageHeader, PackageSpec, PayloadDigest, PayloadSource,
     PayloadView, Platform, RecoveryV1Kind, RecoveryV1Spec, RecoveryV2Spec, Result, SigningKey,
-    UserdataSpec, VerificationContext, VerificationPolicy,
+    UserdataSpec, VerificationContext, VerificationLimits, VerificationPolicy,
 };
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -132,8 +132,6 @@ fn convert_file(input: &Path, args: &ConvertArgs) -> Result<()> {
     } else {
         None
     };
-    let expected_hash = descriptor_md5(&descriptor);
-
     if args.stdout {
         let signature_path = if let Some(bytes) = signature.as_deref() {
             let path = signature_name(input);
@@ -146,7 +144,7 @@ fn convert_file(input: &Path, args: &ConvertArgs) -> Result<()> {
             None
         };
         if let Err(error) = staged_output(Path::new("-"), |writer| {
-            convert_to_file(package, writer, args, expected_hash)
+            convert_to_file(package, writer, args, &descriptor)
         }) {
             if let Some(path) = signature_path {
                 let _ = fs::remove_file(path);
@@ -159,7 +157,7 @@ fn convert_file(input: &Path, args: &ConvertArgs) -> Result<()> {
     let output = converted_name(input, args);
     eprintln!("Converting {} to {}", input.display(), output.display());
     atomic_write(&output, |writer| {
-        convert_to_file(package, writer, args, expected_hash)
+        convert_to_file(package, writer, args, &descriptor)
     })?;
     if let Some(bytes) = signature.as_deref() {
         let signature_path = signature_name(input);
@@ -193,7 +191,7 @@ fn convert_stream<R: Read, W: Write>(input: R, mut output: W, args: &ConvertArgs
         reject_android(&descriptor)?;
     } else {
         let mut staged = tempfile::tempfile()?;
-        convert_to_file(package, &mut staged, args, descriptor_md5(&descriptor))?;
+        convert_to_file(package, &mut staged, args, &descriptor)?;
         staged.seek(SeekFrom::Start(0))?;
         io::copy(&mut staged, &mut output)?;
         output.flush()?;
@@ -223,12 +221,47 @@ fn convert_to_file<R: Read>(
     package: Package<R>,
     writer: &mut File,
     args: &ConvertArgs,
-    expected_hash: Option<kindletool::Md5Digest>,
+    descriptor: &PackageDescriptor,
 ) -> Result<()> {
     convert_payload(package, &mut *writer, args)?;
     writer.flush()?;
     if !args.fake_sign && !effective_unwrap(args) {
-        validate_payload_hash(writer, expected_hash)?;
+        validate_payload_hash(writer, descriptor_md5(descriptor))?;
+        validate_decoded_archive(writer, descriptor)?;
+    }
+    Ok(())
+}
+
+fn validate_decoded_archive(archive: &mut File, descriptor: &PackageDescriptor) -> Result<()> {
+    let Some(kind) = descriptor.archive_kind() else {
+        return Ok(());
+    };
+    archive.seek(SeekFrom::Start(0))?;
+    let report = UpdateArchiveVerifier::new(
+        kind,
+        VerificationPolicy::structural(),
+        None,
+        VerificationLimits::default(),
+    )
+    .verify(&mut *archive)?;
+    if !report.is_valid() {
+        return Err(Error::ArchiveMismatch {
+            path: None,
+            expected: "structurally valid converted archive".to_owned(),
+            actual: format!("{:?}", report.issues()),
+        });
+    }
+    if let Some(PayloadDigest::ComponentSha256(expected)) = descriptor.payload_digest() {
+        match report.component_content() {
+            ComponentContentCheck::Unique(actual) if actual == expected => {}
+            actual => {
+                return Err(Error::ArchiveMismatch {
+                    path: None,
+                    expected: format!("component content SHA-256 {expected}"),
+                    actual: format!("{actual:?}"),
+                });
+            }
+        }
     }
     Ok(())
 }
