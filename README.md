@@ -76,7 +76,9 @@ format-specific callers. Creation uses validated `OtaV1Spec`, `OtaV2Spec`, `Reco
 and signed/unsigned behavior are explicit; no security-sensitive `Default` exists.
 
 `Package::verify` returns `ValidationOutcome::Accepted` or `Rejected` with fixed signature,
-payload, archive, and target reports. Verification preserves the seek position. `SafeExtractor`
+payload, archive, and target reports. Detailed archive issues remain available through
+`VerificationReport::archive_report`, and `VerificationKey::default_jailbreak` exposes the
+embedded developer public key without constructing its private half. Verification preserves the seek position. `SafeExtractor`
 verifies into a spool and only commits an accepted archive from same-filesystem staging.
 Third-party RSA, tar, and gzip types do not appear in the public API.
 

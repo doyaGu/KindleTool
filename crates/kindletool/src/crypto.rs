@@ -146,6 +146,16 @@ impl fmt::Debug for VerificationKey {
 }
 
 impl VerificationKey {
+    /// Return the jailbreak developer public key embedded by the original `KindleTool`.
+    pub fn default_jailbreak() -> Result<Self> {
+        let key = RsaPublicKey::new(parse_hex_biguint(RSA_N)?, parse_hex_biguint(RSA_E)?).map_err(
+            |error| Error::InvalidKey {
+                message: error.to_string(),
+            },
+        )?;
+        Ok(Self { inner: key })
+    }
+
     /// Load a PKCS#1 or `SubjectPublicKeyInfo` PEM public key.
     pub fn from_pem(pem: &str) -> Result<Self> {
         let key = RsaPublicKey::from_pkcs1_pem(pem)

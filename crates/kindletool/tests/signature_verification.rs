@@ -5,7 +5,7 @@ use kindletool::{
     FirmwareRevision, OtaV1Kind, OtaV1Spec, Package, PackageEncoder, PackageSpec,
     PayloadIntegrityCheck, PayloadSource, PayloadView, RecoveryV1Kind, RecoveryV1Spec,
     SignatureCheck, SigningKey, TargetFieldCheck, UpdateArchiveBuilder, ValidationOutcome,
-    VerificationContext, VerificationLimits, VerificationPolicy,
+    VerificationContext, VerificationKey, VerificationLimits, VerificationPolicy,
 };
 use std::fs;
 use std::io::Cursor;
@@ -51,6 +51,7 @@ fn authentic_package_verification_checks_every_layer_and_preserves_payload_posit
         outcome.report().payload(),
         PayloadIntegrityCheck::Valid { .. }
     ));
+    assert!(outcome.report().archive_report().unwrap().is_valid());
     assert_eq!(outcome.report().target().device(), TargetFieldCheck::Match);
     let mut decoded = Vec::new();
     package
@@ -90,6 +91,32 @@ fn structural_allows_missing_package_key_but_authentic_rejects_it() {
 }
 
 #[test]
+fn embedded_jailbreak_public_key_verifies_every_signature_layer() {
+    let signing_key = SigningKey::default_jailbreak().unwrap();
+    let archive = test_archive(&signing_key);
+    let mut encoded = Vec::new();
+    PackageEncoder::encode(
+        &ota_v1_spec(),
+        Cursor::new(archive),
+        &mut encoded,
+        EncodeOptions::signed(PayloadSource::Decoded, &signing_key, Certificate::Developer)
+            .unwrap(),
+    )
+    .unwrap();
+    let public_key = VerificationKey::default_jailbreak().unwrap();
+    let context = VerificationContext::new()
+        .with_package_key(Certificate::Developer, public_key.clone())
+        .with_archive_key(public_key);
+    let mut package = Package::parse(Cursor::new(encoded)).unwrap();
+
+    let outcome = package
+        .verify(&context, VerificationPolicy::authentic())
+        .unwrap();
+
+    assert!(outcome.is_accepted(), "{outcome:?}");
+}
+
+#[test]
 fn tampered_payload_is_a_rejected_verdict_not_an_execution_error() {
     let key = SigningKey::default_jailbreak().unwrap();
     let archive = test_archive(&key);
@@ -114,6 +141,31 @@ fn tampered_payload_is_a_rejected_verdict_not_an_execution_error() {
         outcome.report().payload(),
         PayloadIntegrityCheck::Invalid { .. }
     ));
+}
+
+#[test]
+fn malformed_archive_is_a_detailed_rejected_verdict() {
+    let mut encoded = Vec::new();
+    PackageEncoder::encode(
+        &ota_v1_spec(),
+        Cursor::new(b"not a gzip archive"),
+        &mut encoded,
+        EncodeOptions::unsigned(PayloadSource::Decoded),
+    )
+    .unwrap();
+    let mut package = Package::parse(Cursor::new(encoded)).unwrap();
+
+    let outcome = package
+        .verify(
+            &VerificationContext::new(),
+            VerificationPolicy::structural(),
+        )
+        .unwrap();
+
+    assert!(matches!(outcome, ValidationOutcome::Rejected(_)));
+    let archive = outcome.report().archive_report().unwrap();
+    assert!(!archive.is_valid());
+    assert!(!archive.issues().is_empty());
 }
 
 #[test]

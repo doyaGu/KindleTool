@@ -28,8 +28,9 @@ ArchiveKind::block_size() -> u64
 VerificationPolicy::{structural, authentic}
 VerificationContext; VerificationLimits; ValidationOutcome; VerificationReport
 SignatureCheck; PayloadIntegrityCheck; ArchiveCheck; TargetCheck; TargetFieldCheck
+VerificationReport::archive_report() -> Option<&ArchiveVerificationReport>
 
 ArchiveInput; ArchiveOptions; UpdateArchiveBuilder; UpdateArchiveVerifier
 SafeExtractor; SafeExtractionOutcome; ArchiveVerificationReport; ArchiveIssue
 
-SigningKey; VerificationKey; Error; Result
+SigningKey; VerificationKey; VerificationKey::default_jailbreak(); Error; Result

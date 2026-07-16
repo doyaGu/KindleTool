@@ -176,6 +176,8 @@ impl ArchiveInput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ArchiveIssue {
+    /// The gzip or tar container is malformed.
+    MalformedArchive,
     /// A path is unsafe, duplicated, non-UTF-8, or exceeds configured limits.
     UnsafePath(String),
     /// The archive contains an unsupported entry type.
@@ -202,6 +204,14 @@ pub struct ArchiveVerificationReport {
 }
 
 impl ArchiveVerificationReport {
+    pub(crate) fn malformed() -> Self {
+        Self {
+            entries: 0,
+            issues: vec![ArchiveIssue::MalformedArchive],
+            component_content: ComponentContentCheck::NotApplicable,
+        }
+    }
+
     /// Number of archive entries inspected.
     #[must_use]
     pub const fn entries(&self) -> usize {

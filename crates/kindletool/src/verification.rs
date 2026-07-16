@@ -1,5 +1,6 @@
 //! Fixed package verification policies and typed verdicts.
 
+use crate::archive::ArchiveVerificationReport;
 use crate::crypto::VerificationKey;
 use crate::model::{Board, Certificate, PackageDescriptor, PackageHeader, Platform};
 use crate::{DeviceCode, FirmwareRevision, Md5Digest, Sha256Digest};
@@ -311,6 +312,7 @@ pub struct VerificationReport {
     signature: SignatureCheck,
     payload: PayloadIntegrityCheck,
     archive: ArchiveCheck,
+    archive_report: Option<ArchiveVerificationReport>,
     target: TargetCheck,
 }
 
@@ -330,6 +332,11 @@ impl VerificationReport {
     pub const fn archive(&self) -> ArchiveCheck {
         self.archive
     }
+    /// Detailed archive findings, when this package contains a checked archive.
+    #[must_use]
+    pub const fn archive_report(&self) -> Option<&ArchiveVerificationReport> {
+        self.archive_report.as_ref()
+    }
     /// Targeting results.
     #[must_use]
     pub const fn target(&self) -> &TargetCheck {
@@ -340,12 +347,14 @@ impl VerificationReport {
         signature: SignatureCheck,
         payload: PayloadIntegrityCheck,
         archive: ArchiveCheck,
+        archive_report: Option<ArchiveVerificationReport>,
         target: TargetCheck,
     ) -> Self {
         Self {
             signature,
             payload,
             archive,
+            archive_report,
             target,
         }
     }

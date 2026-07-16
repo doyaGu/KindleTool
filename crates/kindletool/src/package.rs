@@ -215,9 +215,10 @@ impl<R: Read + Seek> Package<R> {
     ) -> Result<ValidationOutcome> {
         let signature = verify_signature(&mut self.inner, context)?;
         let mut payload = verify_payload_integrity(&mut self.inner)?;
-        let archive = verify_archive(&mut self.inner, context, policy, &mut payload)?;
+        let (archive, archive_report) =
+            verify_archive(&mut self.inner, context, policy, &mut payload)?;
         let target = target_check(self.inner.info(), context);
-        let report = VerificationReport::new(signature, payload, archive, target);
+        let report = VerificationReport::new(signature, payload, archive, archive_report, target);
         Ok(if accepts(policy, &report) {
             ValidationOutcome::Accepted(report)
         } else {
@@ -436,10 +437,10 @@ fn verify_archive<R: Read + Seek>(
     context: &VerificationContext,
     policy: VerificationPolicy,
     payload: &mut PayloadIntegrityCheck,
-) -> Result<ArchiveCheck> {
+) -> Result<(ArchiveCheck, Option<crate::ArchiveVerificationReport>)> {
     let descriptor = package.info();
     let Some(kind) = descriptor.archive_kind() else {
-        return Ok(ArchiveCheck::NotArchive);
+        return Ok((ArchiveCheck::NotArchive, None));
     };
     let storage = descriptor.magic().profile().payload_storage;
     let gzip_magic = match descriptor.header() {
@@ -471,10 +472,13 @@ fn verify_archive<R: Read + Seek>(
             Err(Error::Io(error))
                 if matches!(
                     error.kind(),
-                    io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof
+                    io::ErrorKind::InvalidData
+                        | io::ErrorKind::InvalidInput
+                        | io::ErrorKind::UnexpectedEof
                 ) =>
             {
-                return Ok(ArchiveCheck::Invalid);
+                let report = crate::ArchiveVerificationReport::malformed();
+                return Ok((ArchiveCheck::Invalid, Some(report)));
             }
             Err(error) => return Err(error),
         };
@@ -492,11 +496,12 @@ fn verify_archive<R: Read + Seek>(
             ComponentContentCheck::NotApplicable => PayloadIntegrityCheck::UnsupportedScope,
         };
     }
-    Ok(if report.is_valid() {
+    let check = if report.is_valid() {
         ArchiveCheck::Valid
     } else {
         ArchiveCheck::Invalid
-    })
+    };
+    Ok((check, Some(report)))
 }
 
 fn with_preserved_position<R: Seek, T>(
