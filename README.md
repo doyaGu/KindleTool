@@ -40,6 +40,7 @@ kindletool help [COMMAND]
 The interface, short and long options, environment variables, default output names, and normal
 stdout/stderr behavior remain compatible with KindleTool 1.6.6/1.7. Run `kindletool help create`
 for the data-driven device, platform, board, magic, and certificate catalogs.
+Unknown future platform and board selectors may be supplied as decimal or `0x`-prefixed raw values.
 
 `convert` creates `<stem>_converted.tar.gz` and deletes the source after the output is validated,
 flushed, and atomically committed. `-k` keeps the source, `-c` writes staged stdout without deleting

@@ -1,6 +1,8 @@
 //! Public value-type behavior.
 
-use kindletool::{ArchivePath, FirmwareRange, FirmwareRevision, Md5Digest, Sha256Digest};
+use kindletool::{
+    ArchivePath, Board, FirmwareRange, FirmwareRevision, Md5Digest, Platform, Sha256Digest,
+};
 use std::str::FromStr;
 
 #[test]
@@ -52,4 +54,12 @@ fn archive_path_accepts_only_normalized_relative_utf8_paths() {
             "accepted {unsafe_path:?}"
         );
     }
+}
+
+#[test]
+fn platform_and_board_names_accept_future_numeric_codes() {
+    assert_eq!(Platform::from_name("0x1234").unwrap().raw(), 0x1234);
+    assert_eq!(Platform::from_name("4660").unwrap().raw(), 4660);
+    assert_eq!(Board::from_name("0x5678").unwrap().raw(), 0x5678);
+    assert_eq!(Board::from_name("22136").unwrap().raw(), 22_136);
 }

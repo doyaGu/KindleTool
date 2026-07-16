@@ -349,14 +349,7 @@ impl Platform {
 
     /// Parse a documented CLI platform name.
     pub fn from_name(name: &str) -> Result<Self> {
-        PLATFORM_CATALOG
-            .iter()
-            .find(|record| record.cli_name.eq_ignore_ascii_case(name))
-            .map(|record| Self(record.code))
-            .ok_or_else(|| Error::InvalidField {
-                field: "platform",
-                message: format!("unknown platform {name}"),
-            })
+        parse_named_code(PLATFORM_CATALOG, name, "platform").map(Self)
     }
 
     /// Human-readable name, preserving unknown numeric values.
@@ -395,14 +388,7 @@ impl Board {
 
     /// Parse a documented CLI board name.
     pub fn from_name(name: &str) -> Result<Self> {
-        BOARD_CATALOG
-            .iter()
-            .find(|record| record.cli_name.eq_ignore_ascii_case(name))
-            .map(|record| Self(record.code))
-            .ok_or_else(|| Error::InvalidField {
-                field: "board",
-                message: format!("unknown board {name}"),
-            })
+        parse_named_code(BOARD_CATALOG, name, "board").map(Self)
     }
 
     /// Human-readable board name.
@@ -413,6 +399,26 @@ impl Board {
             .find(|record| record.code == self.0)
             .map_or("Unknown", |record| record.display_name)
     }
+}
+
+fn parse_named_code(catalog: &[NamedCode], name: &str, field: &'static str) -> Result<u32> {
+    if let Some(record) = catalog
+        .iter()
+        .find(|record| record.cli_name.eq_ignore_ascii_case(name))
+    {
+        return Ok(record.code);
+    }
+    let parsed = name
+        .strip_prefix("0x")
+        .or_else(|| name.strip_prefix("0X"))
+        .map_or_else(
+            || name.parse::<u32>(),
+            |digits| u32::from_str_radix(digits, 16),
+        );
+    parsed.map_err(|_| Error::InvalidField {
+        field,
+        message: format!("unknown {field} {name}"),
+    })
 }
 
 /// Parsed OTA V1 header.
