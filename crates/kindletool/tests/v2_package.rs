@@ -60,6 +60,25 @@ fn component_parser_rejects_an_inverted_firmware_range() {
 }
 
 #[test]
+fn truncated_headers_report_the_exact_available_byte_count() {
+    let mut encoded = b"FC02".to_vec();
+    encoded.extend_from_slice(&[0; 3]);
+
+    let Err(error) = Package::parse(Cursor::new(encoded)) else {
+        panic!("truncated header must be rejected");
+    };
+
+    assert!(matches!(
+        error,
+        Error::Truncated {
+            context: "OTA V1 header",
+            needed: kindletool::model::OTA_V1_HEADER_LEN,
+            remaining: 3,
+        }
+    ));
+}
+
+#[test]
 fn legacy_recovery_exposes_its_target_device() {
     let target = DeviceCode(0x201);
     let spec = PackageSpec::RecoveryV1(RecoveryV1Spec::legacy(

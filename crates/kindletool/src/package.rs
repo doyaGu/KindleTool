@@ -989,34 +989,33 @@ fn validate_hex(bytes: &[u8], expected: usize, field: &'static str) -> Result<()
 
 fn read_vec<R: Read>(reader: &mut R, length: usize, context: &'static str) -> Result<Vec<u8>> {
     let mut output = vec![0_u8; length];
-    reader.read_exact(&mut output).map_err(|error| {
-        if error.kind() == io::ErrorKind::UnexpectedEof {
-            Error::Truncated {
-                context,
-                needed: length,
-                remaining: 0,
-            }
-        } else {
-            Error::Io(error)
-        }
-    })?;
+    read_complete(reader, &mut output, context)?;
     Ok(output)
 }
 
 fn read_array<const N: usize, R: Read>(reader: &mut R, context: &'static str) -> Result<[u8; N]> {
     let mut output = [0_u8; N];
-    reader.read_exact(&mut output).map_err(|error| {
-        if error.kind() == io::ErrorKind::UnexpectedEof {
-            Error::Truncated {
-                context,
-                needed: N,
-                remaining: 0,
-            }
-        } else {
-            Error::Io(error)
-        }
-    })?;
+    read_complete(reader, &mut output, context)?;
     Ok(output)
+}
+
+fn read_complete<R: Read>(reader: &mut R, output: &mut [u8], context: &'static str) -> Result<()> {
+    let mut available = 0;
+    while available < output.len() {
+        match reader.read(&mut output[available..]) {
+            Ok(0) => {
+                return Err(Error::Truncated {
+                    context,
+                    needed: output.len(),
+                    remaining: available,
+                });
+            }
+            Ok(count) => available += count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(Error::Io(error)),
+        }
+    }
+    Ok(())
 }
 
 fn slice_at<'input>(
