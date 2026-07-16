@@ -8,12 +8,28 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
+flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
 libfuzzer-sys = "0.4"
 kindletool = { path = "../crates/kindletool" }
+tar = "0.4.46"
 
 [[bin]]
 name = "package_reader"
 path = "fuzz_targets/package_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "archive_path"
+path = "fuzz_targets/archive_path.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "manifest_verifier"
+path = "fuzz_targets/manifest_verifier.rs"
 test = false
 doc = false
 bench = false

@@ -54,11 +54,13 @@ jobs:
           manifest-path: Cargo.toml
           command: check
 
-      - name: Parser fuzz smoke test
+      - name: Parser and verifier fuzz smoke tests
         run: |
           rustup toolchain install nightly --profile minimal
           cargo +nightly install cargo-fuzz --locked
-          cargo +nightly fuzz run package_reader -- -max_total_time=30
+          cargo +nightly fuzz run package_reader -- -max_total_time=20
+          cargo +nightly fuzz run archive_path -- -max_total_time=20
+          cargo +nightly fuzz run manifest_verifier -- -max_total_time=20
 
   build:
     name: ${{ matrix.asset }}

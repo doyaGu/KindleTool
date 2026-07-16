@@ -217,8 +217,10 @@ dependencies = [
 name = "kindletool-fuzz"
 version = "0.0.0"
 dependencies = [
+ "flate2",
  "kindletool",
  "libfuzzer-sys",
+ "tar",
 ]
 
 [[package]]

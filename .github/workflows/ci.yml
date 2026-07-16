@@ -69,5 +69,8 @@ jobs:
       - uses: actions/checkout@v6
       - run: rustup toolchain install nightly --profile minimal
       - run: cargo +nightly install cargo-fuzz --locked
-      - name: Fuzz untrusted package parsing
-        run: cargo +nightly fuzz run package_reader -- -max_total_time=30
+      - name: Fuzz untrusted package and archive inputs
+        run: |
+          cargo +nightly fuzz run package_reader -- -max_total_time=20
+          cargo +nightly fuzz run archive_path -- -max_total_time=20
+          cargo +nightly fuzz run manifest_verifier -- -max_total_time=20
