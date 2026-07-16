@@ -300,6 +300,7 @@ fn extract(args: &ExtractArgs) -> Result<()> {
 
     if !args.fake_sign {
         validate_payload_hash(&mut payload, expected_hash)?;
+        validate_decoded_archive(&mut payload, &descriptor)?;
     }
 
     payload.seek(SeekFrom::Start(0))?;
