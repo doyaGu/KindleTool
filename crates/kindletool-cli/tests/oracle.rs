@@ -13,8 +13,7 @@ use kindletool::{ArchiveOptions, SigningKey, UpdateArchiveBuilder};
 
 struct PackageCase {
     name: &'static str,
-    c_create_arguments: &'static [&'static str],
-    rust_create_arguments: &'static [&'static str],
+    create_arguments: &'static [&'static str],
     output_name: &'static str,
     expected_magic: &'static str,
 }
@@ -75,43 +74,19 @@ fn fixed_archive_package_matrix_is_byte_identical_and_mutually_readable() {
     let cases = [
         PackageCase {
             name: "fc02",
-            c_create_arguments: &["create", "ota", "-d", "k3w", "-b", "FC02", "-t", "max"],
-            rust_create_arguments: &[
-                "create",
-                "ota-v1",
-                "--kind",
-                "ota",
-                "--source-revision",
-                "0",
-                "--target-revision",
-                "4294967295",
-                "--device",
-                "k3w",
-            ],
+            create_arguments: &["create", "ota", "-d", "k3w", "-b", "FC02", "-t", "max"],
             output_name: "update_fc02.bin",
             expected_magic: "FC02",
         },
         PackageCase {
             name: "fd03",
-            c_create_arguments: &["create", "ota", "-d", "k3w", "-b", "FD03", "-t", "max"],
-            rust_create_arguments: &[
-                "create",
-                "ota-v1",
-                "--kind",
-                "versionless",
-                "--source-revision",
-                "0",
-                "--target-revision",
-                "4294967295",
-                "--device",
-                "k3w",
-            ],
+            create_arguments: &["create", "ota", "-d", "k3w", "-b", "FD03", "-t", "max"],
             output_name: "update_fd03.bin",
             expected_magic: "FD03",
         },
         PackageCase {
             name: "fc04",
-            c_create_arguments: &[
+            create_arguments: &[
                 "create",
                 "ota2",
                 "-d",
@@ -121,26 +96,12 @@ fn fixed_archive_package_matrix_is_byte_identical_and_mutually_readable() {
                 "-x",
                 "PackageName=differential-fixture",
             ],
-            rust_create_arguments: &[
-                "create",
-                "ota-v2",
-                "--kind",
-                "ota",
-                "--source-revision",
-                "0",
-                "--target-revision",
-                "18446744073709551615",
-                "--device",
-                "paperwhite3",
-                "--metadata",
-                "PackageName=differential-fixture",
-            ],
             output_name: "update_fc04.bin",
             expected_magic: "FC04",
         },
         PackageCase {
             name: "fd04",
-            c_create_arguments: &[
+            create_arguments: &[
                 "create",
                 "ota2",
                 "-d",
@@ -150,26 +111,12 @@ fn fixed_archive_package_matrix_is_byte_identical_and_mutually_readable() {
                 "-x",
                 "PackageName=differential-fixture",
             ],
-            rust_create_arguments: &[
-                "create",
-                "ota-v2",
-                "--kind",
-                "versionless",
-                "--source-revision",
-                "0",
-                "--target-revision",
-                "18446744073709551615",
-                "--device",
-                "paperwhite3",
-                "--metadata",
-                "PackageName=differential-fixture",
-            ],
             output_name: "update_fd04.bin",
             expected_magic: "FD04",
         },
         PackageCase {
             name: "fl01",
-            c_create_arguments: &[
+            create_arguments: &[
                 "create",
                 "ota2",
                 "-d",
@@ -179,26 +126,12 @@ fn fixed_archive_package_matrix_is_byte_identical_and_mutually_readable() {
                 "-x",
                 "PackageName=differential-fixture",
             ],
-            rust_create_arguments: &[
-                "create",
-                "ota-v2",
-                "--kind",
-                "language",
-                "--source-revision",
-                "0",
-                "--target-revision",
-                "18446744073709551615",
-                "--device",
-                "paperwhite3",
-                "--metadata",
-                "PackageName=differential-fixture",
-            ],
             output_name: "update_fl01.bin",
             expected_magic: "FL01",
         },
         PackageCase {
             name: "official_fc04",
-            c_create_arguments: &[
+            create_arguments: &[
                 "create",
                 "ota2",
                 "-d",
@@ -211,38 +144,24 @@ fn fixed_archive_package_matrix_is_byte_identical_and_mutually_readable() {
                 "-t",
                 "9",
             ],
-            rust_create_arguments: &[
-                "create",
-                "ota-v2",
-                "--kind",
-                "ota",
-                "--source-revision",
-                "7",
-                "--target-revision",
-                "9",
-                "--device",
-                "paperwhite3",
-            ],
             output_name: "update_official_fc04.bin",
             expected_magic: "FC04",
         },
         PackageCase {
             name: "fb01",
-            c_create_arguments: &["create", "recovery", "-d", "k3w", "-b", "FB01", "-t", "max"],
-            rust_create_arguments: &["create", "recovery-v1", "--kind", "fb01", "--device", "k3w"],
+            create_arguments: &["create", "recovery", "-d", "k3w", "-b", "FB01", "-t", "max"],
             output_name: "update_fb01.bin",
             expected_magic: "FB01",
         },
         PackageCase {
             name: "fb02",
-            c_create_arguments: &["create", "recovery", "-d", "k3w", "-b", "FB02", "-t", "max"],
-            rust_create_arguments: &["create", "recovery-v1", "--kind", "fb02", "--device", "k3w"],
+            create_arguments: &["create", "recovery", "-d", "k3w", "-b", "FB02", "-t", "max"],
             output_name: "update_fb02.bin",
             expected_magic: "FB02",
         },
         PackageCase {
             name: "fb02_h2",
-            c_create_arguments: &[
+            create_arguments: &[
                 "create",
                 "recovery",
                 "-d",
@@ -258,24 +177,12 @@ fn fixed_archive_package_matrix_is_byte_identical_and_mutually_readable() {
                 "-t",
                 "max",
             ],
-            rust_create_arguments: &[
-                "create",
-                "recovery-v1",
-                "--kind",
-                "fb02",
-                "--target-revision",
-                "18446744073709551615",
-                "--platform",
-                "unspecified",
-                "--board",
-                "unspecified",
-            ],
             output_name: "update_fb02_h2.bin",
             expected_magic: "FB02",
         },
         PackageCase {
             name: "fb03",
-            c_create_arguments: &[
+            create_arguments: &[
                 "create",
                 "recovery2",
                 "-d",
@@ -287,25 +194,12 @@ fn fixed_archive_package_matrix_is_byte_identical_and_mutually_readable() {
                 "-t",
                 "max",
             ],
-            rust_create_arguments: &[
-                "create",
-                "recovery-v2",
-                "--target-revision",
-                "18446744073709551615",
-                "--platform",
-                "unspecified",
-                "--board",
-                "unspecified",
-                "--device",
-                "none",
-            ],
             output_name: "update_fb03.bin",
             expected_magic: "FB03",
         },
         PackageCase {
             name: "sp01_userdata",
-            c_create_arguments: &["create", "sig", "-U"],
-            rust_create_arguments: &["create", "userdata"],
+            create_arguments: &["create", "sig", "-U"],
             output_name: "data.stgz",
             expected_magic: "SP01",
         },
@@ -331,12 +225,12 @@ fn exercise_fixed_archive_case(
 
     let rust_output = format!("rust/{}", case.output_name);
     let c_output = format!("c/{}", case.output_name);
-    let mut rust_arguments = case.rust_create_arguments.to_vec();
-    rust_arguments.extend(["--archive", "fixture.tar.gz", "--output", &rust_output]);
+    let mut rust_arguments = case.create_arguments.to_vec();
+    rust_arguments.extend(["fixture.tar.gz", &rust_output]);
     let output = run(rust, &directory, &rust_arguments);
     assert_success(&output, &format!("Rust create {}", case.name));
 
-    let mut c_arguments = case.c_create_arguments.to_vec();
+    let mut c_arguments = case.create_arguments.to_vec();
     c_arguments.extend(["fixture.tar.gz", &c_output]);
     let output = run(oracle, &directory, &c_arguments);
     assert_success(&output, &format!("C create {}", case.name));
@@ -348,29 +242,16 @@ fn exercise_fixed_archive_case(
         case.name
     );
 
-    let rust_inspect = run(rust, &directory, &["inspect", &c_output]);
+    let rust_inspect = run(rust, &directory, &["convert", "-i", &c_output]);
     assert_success(&rust_inspect, &format!("Rust reads C {}", case.name));
-    assert!(String::from_utf8_lossy(&rust_inspect.stdout).contains(case.expected_magic));
+    assert!(String::from_utf8_lossy(&rust_inspect.stderr).contains(case.expected_magic));
     let c_inspect = run(oracle, &directory, &["convert", "-i", &rust_output]);
     assert_success(&c_inspect, &format!("C reads Rust {}", case.name));
     assert!(String::from_utf8_lossy(&c_inspect.stderr).contains(case.expected_magic));
 
-    let rust_converted = format!("rust/{}.tar.gz", case.name);
-    let output = run(
-        rust,
-        &directory,
-        &[
-            "export",
-            "payload",
-            "--view",
-            "decoded",
-            &c_output,
-            "--output",
-            &rust_converted,
-        ],
-    );
+    let output = run(rust, &directory, &["convert", "-c", &c_output]);
     assert_success(&output, &format!("Rust converts C {}", case.name));
-    assert_eq!(fs::read(directory.join(&rust_converted)).unwrap(), archive);
+    assert_eq!(output.stdout, archive);
 
     let output = run(oracle, &directory, &["convert", "-k", &rust_output]);
     assert_success(&output, &format!("C converts Rust {}", case.name));
@@ -414,18 +295,13 @@ fn directory_archives_have_matching_manifests_signatures_and_contents() {
 
     let rust_args = [
         "create",
-        "ota-v2",
-        "--kind",
-        "versionless",
-        "--source-revision",
-        "0",
-        "--target-revision",
-        "18446744073709551615",
-        "--device",
+        "ota2",
+        "-d",
         "paperwhite3",
-        "--output",
-        "rust/update_directory.bin",
+        "-b",
+        "FD04",
         "payload",
+        "rust/update_directory.bin",
     ];
     assert_success(
         &run(&rust, temporary.path(), &rust_args),
@@ -506,9 +382,13 @@ fn component_gzip_and_zip_detection_match_the_oracle() {
     let component = component_package(&archive);
     fs::write(temporary.path().join("rust/component.bin"), &component).unwrap();
     fs::write(temporary.path().join("c/component.bin"), &component).unwrap();
-    let output = run(&rust, temporary.path(), &["inspect", "c/component.bin"]);
+    let output = run(
+        &rust,
+        temporary.path(),
+        &["convert", "-i", "c/component.bin"],
+    );
     assert_success(&output, "Rust component inspection");
-    assert!(String::from_utf8_lossy(&output.stdout).contains("CB01"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("CB01"));
     let output = run(
         &oracle,
         temporary.path(),
@@ -520,15 +400,7 @@ fn component_gzip_and_zip_detection_match_the_oracle() {
         &run(
             &rust,
             temporary.path(),
-            &[
-                "export",
-                "payload",
-                "--view",
-                "decoded",
-                "c/component.bin",
-                "--output",
-                "c/component_converted.tar.gz",
-            ],
+            &["convert", "-k", "c/component.bin"],
         ),
         "Rust converts C component",
     );
@@ -552,9 +424,8 @@ fn component_gzip_and_zip_detection_match_the_oracle() {
     fs::write(temporary.path().join("plain.stgz"), &archive).unwrap();
     fs::write(temporary.path().join("android.bin"), b"PK\x03\x04fixture").unwrap();
     for (input, expected) in [("plain.stgz", "GZIP"), ("android.bin", "ZIP")] {
-        let output = run(&rust, temporary.path(), &["inspect", input]);
-        assert_success(&output, "Rust raw inspection");
-        assert!(String::from_utf8_lossy(&output.stdout).contains(expected));
+        let output = run(&rust, temporary.path(), &["convert", "-i", input]);
+        assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
         let output = run(&oracle, temporary.path(), &["convert", "-i", input]);
         assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
     }
