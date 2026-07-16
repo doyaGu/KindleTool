@@ -1,33 +1,256 @@
+use crate::archive::{ComponentContentCheck, UpdateArchiveVerifier};
 use crate::codec::{DemangleReader, copy_demangled, copy_mangled, demangle, mangle};
-use crate::crypto::{SigningKey, VerificationKey, md5_hex, md5_hex_reader};
+use crate::crypto::{SigningKey, md5_hex, md5_hex_reader};
 use crate::devices::DeviceCode;
+use crate::format::{HeaderLayout, PayloadStorage};
 use crate::model::{
     Board, BundleMagic, Certificate, ComponentHeader, OTA_V1_HEADER_LEN, OtaV1Header, OtaV2Header,
-    PackageHeader, PackageInfo, PackageSpec, Platform, RECOVERY_HEADER_LEN, RecoveryV1Header,
-    RecoveryV1Spec, RecoveryV2Header, SIGNATURE_HEADER_LEN, SignatureEnvelope,
+    OtaV2Spec, PackageDescriptor, PackageHeader, PackageSpec, Platform, RECOVERY_HEADER_LEN,
+    RecoveryV1Header, RecoveryV1Layout, RecoveryV1Spec, RecoveryV2Header, RecoveryV2Spec,
+    SIGNATURE_HEADER_LEN, SignatureEnvelope,
 };
 use crate::verification::{
-    PayloadIntegrityStatus, SignatureStatus, SignatureVerification, VerificationOptions,
-    VerificationReport, device_compatibility,
+    ArchiveCheck, PayloadIntegrityCheck, SignatureCheck, ValidationOutcome, VerificationContext,
+    VerificationPolicy, VerificationReport, accepts, target_check,
 };
-use crate::{Error, Result};
+use crate::{Error, FirmwareRange, Md5Digest, Result};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::str::FromStr;
 
 const OTA_V2_FIXED_1: usize = 18;
 const OTA_V2_FIXED_2: usize = 36;
 const DEFAULT_MAX_METADATA_ITEMS: usize = 4096;
 const DEFAULT_MAX_METADATA_BYTES: usize = 16 * 1024 * 1024;
 
-/// Limits used while parsing untrusted package headers.
+/// Interpretation of payload bytes supplied to [`PackageEncoder`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ParseOptions {
-    /// Maximum OTA V2 metadata item count accepted by the parser.
-    pub max_metadata_items: usize,
-    /// Maximum combined OTA V2 metadata value bytes accepted by the parser.
-    pub max_metadata_bytes: usize,
+pub enum PayloadSource {
+    /// Input bytes are decoded content and normal format transforms should be applied.
+    Decoded,
+    /// Input bytes are already in their exact on-disk representation.
+    Stored,
 }
 
-impl Default for ParseOptions {
+/// Payload representation copied from a parsed package.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PayloadView {
+    /// Decode the format's normal payload transform.
+    Decoded,
+    /// Preserve the exact stored payload bytes.
+    Stored,
+}
+
+/// Explicit package encoding behavior.
+#[derive(Clone, Copy, Debug)]
+pub struct EncodeOptions<'key> {
+    source: PayloadSource,
+    signing: Option<SigningConfiguration<'key>>,
+}
+
+impl<'key> EncodeOptions<'key> {
+    /// Encode without an SP01 envelope.
+    #[must_use]
+    pub const fn unsigned(source: PayloadSource) -> Self {
+        Self {
+            source,
+            signing: None,
+        }
+    }
+
+    /// Encode with an SP01 envelope.
+    pub fn signed(
+        source: PayloadSource,
+        key: &'key SigningKey,
+        certificate: Certificate,
+    ) -> Result<Self> {
+        key.validate_certificate(certificate)?;
+        Ok(Self {
+            source,
+            signing: Some(SigningConfiguration { key, certificate }),
+        })
+    }
+}
+
+/// Summary of one package encoding operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EncodeReport {
+    format: crate::PackageFormat,
+    payload_bytes: u64,
+    output_bytes: u64,
+    payload_digest: Option<crate::Md5Digest>,
+    envelope: Option<Certificate>,
+}
+
+impl EncodeReport {
+    /// Encoded package format.
+    #[must_use]
+    pub const fn format(&self) -> crate::PackageFormat {
+        self.format
+    }
+
+    /// Number of source payload bytes consumed.
+    #[must_use]
+    pub const fn payload_bytes(&self) -> u64 {
+        self.payload_bytes
+    }
+
+    /// Number of package bytes written.
+    #[must_use]
+    pub const fn output_bytes(&self) -> u64 {
+        self.output_bytes
+    }
+
+    /// MD5 of the decoded payload when the format stores one.
+    #[must_use]
+    pub const fn payload_digest(&self) -> Option<crate::Md5Digest> {
+        self.payload_digest
+    }
+
+    /// Whether an SP01 envelope was emitted.
+    #[must_use]
+    pub const fn envelope(&self) -> Option<Certificate> {
+        self.envelope
+    }
+}
+
+/// High-level package encoder with explicit payload and signing semantics.
+pub struct PackageEncoder;
+
+impl PackageEncoder {
+    /// Encode one package, spooling the input so callers only need [`Read`].
+    pub fn encode<R: Read, W: Write>(
+        spec: &PackageSpec,
+        mut payload: R,
+        output: W,
+        options: EncodeOptions<'_>,
+    ) -> Result<EncodeReport> {
+        let mut spool = tempfile::tempfile()?;
+        let payload_bytes = io::copy(&mut payload, &mut spool)?;
+        spool.seek(SeekFrom::Start(0))?;
+
+        let profile = spec.magic().profile();
+        debug_assert!(profile.writable());
+        let payload_digest = if matches!(spec, PackageSpec::Userdata(_)) {
+            None
+        } else {
+            let text = match options.source {
+                PayloadSource::Decoded => md5_hex(&mut spool)?,
+                PayloadSource::Stored => {
+                    let digest = with_preserved_position(&mut spool, |reader| {
+                        md5_hex_reader(DemangleReader::new(reader))
+                    })?;
+                    spool.seek(SeekFrom::Start(0))?;
+                    digest
+                }
+            };
+            Some(crate::Md5Digest::from_str(&text)?)
+        };
+
+        let write_options = WriteOptions {
+            fake_sign: matches!(options.source, PayloadSource::Stored),
+            signing: options.signing,
+        };
+        let output_bytes = PackageWriter::new(output).write(spec, &mut spool, write_options)?;
+        Ok(EncodeReport {
+            format: profile.format(),
+            payload_bytes,
+            output_bytes,
+            payload_digest,
+            envelope: options.signing.map(|signing| signing.certificate),
+        })
+    }
+}
+
+/// Parsed package whose consuming operations cannot be called twice.
+pub struct Package<R> {
+    inner: PackageReader<R>,
+}
+
+impl<R: Read> Package<R> {
+    /// Parse with default resource limits.
+    pub fn parse(reader: R) -> Result<Self> {
+        Ok(Self {
+            inner: PackageReader::new(reader)?,
+        })
+    }
+
+    /// Parse with explicit resource limits.
+    pub fn parse_with_limits(reader: R, limits: ParseLimits) -> Result<Self> {
+        Ok(Self {
+            inner: PackageReader::with_limits(reader, limits)?,
+        })
+    }
+
+    /// Parsed descriptor.
+    #[must_use]
+    pub const fn descriptor(&self) -> &crate::model::PackageDescriptor {
+        self.inner.info()
+    }
+
+    /// Copy one payload representation and consume the package.
+    pub fn copy_payload<W: Write>(mut self, view: PayloadView, writer: W) -> Result<u64> {
+        self.inner
+            .copy_decoded_payload(writer, matches!(view, PayloadView::Stored))
+    }
+
+    /// Remove exactly one SP01 envelope and consume the package.
+    pub fn copy_inner<W: Write>(mut self, writer: W) -> Result<u64> {
+        self.inner.copy_unwrapped(writer)
+    }
+
+    /// Return the source reader positioned at the stored payload.
+    #[must_use]
+    pub fn into_reader(self) -> R {
+        self.inner.into_inner()
+    }
+}
+
+impl<R: Read + Seek> Package<R> {
+    /// Verify this package while preserving the stored-payload position.
+    pub fn verify(
+        &mut self,
+        context: &VerificationContext,
+        policy: VerificationPolicy,
+    ) -> Result<ValidationOutcome> {
+        let signature = verify_signature(&mut self.inner, context)?;
+        let mut payload = verify_payload_integrity(&mut self.inner)?;
+        let archive = verify_archive(&mut self.inner, context, policy, &mut payload)?;
+        let target = target_check(self.inner.info(), context);
+        let report = VerificationReport::new(signature, payload, archive, target);
+        Ok(if accepts(policy, &report) {
+            ValidationOutcome::Accepted(report)
+        } else {
+            ValidationOutcome::Rejected(report)
+        })
+    }
+}
+
+/// Limits used while parsing untrusted package headers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseLimits {
+    /// Maximum OTA V2 metadata item count accepted by the parser.
+    pub(crate) max_metadata_items: usize,
+    /// Maximum combined OTA V2 metadata value bytes accepted by the parser.
+    pub(crate) max_metadata_bytes: usize,
+}
+
+impl ParseLimits {
+    /// Construct explicit non-zero OTA metadata limits.
+    pub fn new(max_metadata_items: usize, max_metadata_bytes: usize) -> Result<Self> {
+        if max_metadata_items == 0 || max_metadata_bytes == 0 {
+            return Err(Error::InvalidField {
+                field: "parse limits",
+                message: "all limits must be greater than zero".to_owned(),
+            });
+        }
+        Ok(Self {
+            max_metadata_items,
+            max_metadata_bytes,
+        })
+    }
+}
+
+impl Default for ParseLimits {
     fn default() -> Self {
         Self {
             max_metadata_items: DEFAULT_MAX_METADATA_ITEMS,
@@ -38,7 +261,7 @@ impl Default for ParseOptions {
 
 /// Local signing configuration used by [`PackageWriter`].
 #[derive(Clone, Copy, Debug)]
-pub struct SigningConfiguration<'key> {
+struct SigningConfiguration<'key> {
     /// RSA private key.
     pub key: &'key SigningKey,
     /// Kindle certificate selector written to SP01.
@@ -47,7 +270,7 @@ pub struct SigningConfiguration<'key> {
 
 /// Package encoding behavior.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct WriteOptions<'key> {
+struct WriteOptions<'key> {
     /// Leave payload bytes unmangled and do not implicitly add SP01.
     pub fake_sign: bool,
     /// Optional SP01 signing configuration.
@@ -55,20 +278,19 @@ pub struct WriteOptions<'key> {
 }
 
 /// Streaming Kindle package reader.
-pub struct PackageReader<R> {
+struct PackageReader<R> {
     reader: R,
-    info: PackageInfo,
-    payload_consumed: bool,
+    info: PackageDescriptor,
 }
 
 impl<R: Read> PackageReader<R> {
     /// Parse a package with default safety limits.
     pub fn new(reader: R) -> Result<Self> {
-        Self::with_options(reader, ParseOptions::default())
+        Self::with_limits(reader, ParseLimits::default())
     }
 
     /// Parse a package with explicit safety limits.
-    pub fn with_options(mut reader: R, options: ParseOptions) -> Result<Self> {
+    pub fn with_limits(mut reader: R, options: ParseLimits) -> Result<Self> {
         let outer_magic_bytes = read_array::<4, _>(&mut reader, "bundle magic")?;
         let outer_magic = BundleMagic::from_bytes(outer_magic_bytes)?;
 
@@ -107,18 +329,17 @@ impl<R: Read> PackageReader<R> {
 
         Ok(Self {
             reader,
-            info: PackageInfo {
+            info: PackageDescriptor {
                 header,
                 envelope,
                 raw_inner_header: encoded_inner_header,
             },
-            payload_consumed: false,
         })
     }
 
     /// Parsed package information.
     #[must_use]
-    pub const fn info(&self) -> &PackageInfo {
+    pub const fn info(&self) -> &PackageDescriptor {
         &self.info
     }
 
@@ -134,131 +355,147 @@ impl<R: Read> PackageReader<R> {
         mut writer: W,
         fake_sign: bool,
     ) -> Result<u64> {
-        match self.info.header {
-            PackageHeader::Android => Err(Error::Unsupported("Android ZIP conversion")),
-            PackageHeader::Userdata { magic } => {
-                self.payload_consumed = true;
-                writer.write_all(&magic)?;
+        match (&self.info.header, fake_sign) {
+            (PackageHeader::Android, false) => Err(Error::UnsupportedFormat {
+                operation: "decode Android ZIP payload",
+            }),
+            (PackageHeader::Android, true) => {
+                writer.write_all(&BundleMagic::Zip.as_bytes())?;
                 Ok(4 + io::copy(&mut self.reader, &mut writer)?)
             }
-            _ if fake_sign => {
-                self.payload_consumed = true;
-                Ok(io::copy(&mut self.reader, &mut writer)?)
+            (PackageHeader::Userdata { magic }, _) => {
+                writer.write_all(magic)?;
+                Ok(4 + io::copy(&mut self.reader, &mut writer)?)
             }
-            _ => {
-                self.payload_consumed = true;
-                Ok(copy_demangled(&mut self.reader, &mut writer)?)
-            }
+            (_, true) => Ok(io::copy(&mut self.reader, &mut writer)?),
+            _ => Ok(copy_demangled(&mut self.reader, &mut writer)?),
         }
     }
 
     /// Write the exact inner package, removing one outer SP01 envelope.
     pub fn copy_unwrapped<W: Write>(&mut self, mut writer: W) -> Result<u64> {
         if self.info.envelope.is_none() {
-            return Err(Error::Unsupported("package is not wrapped in SP01"));
+            return Err(Error::UnsupportedFormat {
+                operation: "unwrap package without SP01",
+            });
         }
-        self.payload_consumed = true;
         writer.write_all(&self.info.raw_inner_header)?;
         Ok(self.info.raw_inner_header.len() as u64 + io::copy(&mut self.reader, &mut writer)?)
     }
-
-    /// Copy the outer payload signature if one exists.
-    pub fn copy_signature<W: Write>(&self, mut writer: W) -> Result<usize> {
-        let envelope = self
-            .info
-            .envelope
-            .as_ref()
-            .ok_or(Error::Unsupported("package has no SP01 signature"))?;
-        writer.write_all(&envelope.signature)?;
-        Ok(envelope.signature.len())
-    }
 }
 
-impl<R: Read + Seek> PackageReader<R> {
-    /// Verify the package signature and payload digest while preserving the stream position.
-    ///
-    /// This must be called before [`Self::copy_decoded_payload`] or [`Self::copy_unwrapped`].
-    pub fn verify(&mut self, options: VerificationOptions<'_>) -> Result<VerificationReport> {
-        let signature = self.verify_signature(options.signature_key)?;
-        let payload_integrity = self.verify_payload_integrity()?;
-        let device_compatibility = device_compatibility(&self.info.header, options.target_device);
-        Ok(VerificationReport {
-            signature,
-            payload_integrity,
-            device_compatibility,
-        })
-    }
-
-    /// Check the decoded payload against the MD5 stored in the package header.
-    ///
-    /// This must be called before [`Self::copy_decoded_payload`] or [`Self::copy_unwrapped`].
-    pub fn verify_payload_integrity(&mut self) -> Result<PayloadIntegrityStatus> {
-        self.ensure_payload_unread()?;
-        let Some(expected) = self.info.header.payload_hash().map(str::to_owned) else {
-            return Ok(PayloadIntegrityStatus::NotAvailable);
-        };
-        let actual = with_preserved_position(&mut self.reader, |reader| {
-            md5_hex_reader(DemangleReader::new(reader))
-        })?;
-        if actual.eq_ignore_ascii_case(&expected) {
-            Ok(PayloadIntegrityStatus::Valid)
+fn verify_payload_integrity<R: Read + Seek>(
+    package: &mut PackageReader<R>,
+) -> Result<PayloadIntegrityCheck> {
+    let Some(expected) = package.info.header.payload_digest() else {
+        return Ok(if package.info.header.component_sha256().is_some() {
+            PayloadIntegrityCheck::UnsupportedScope
         } else {
-            Ok(PayloadIntegrityStatus::Invalid { expected, actual })
-        }
-    }
+            PayloadIntegrityCheck::NotPresent
+        });
+    };
+    let actual = with_preserved_position(&mut package.reader, |reader| {
+        Md5Digest::from_str(&md5_hex_reader(DemangleReader::new(reader))?)
+    })?;
+    Ok(if actual == expected {
+        PayloadIntegrityCheck::Valid { digest: actual }
+    } else {
+        PayloadIntegrityCheck::Invalid { expected, actual }
+    })
+}
 
-    /// Verify the outer SP01 signature while preserving the current stream position.
-    ///
-    /// This must be called before [`Self::copy_decoded_payload`] or [`Self::copy_unwrapped`].
-    pub fn verify_signature(
-        &mut self,
-        key: Option<&VerificationKey>,
-    ) -> Result<SignatureVerification> {
-        self.ensure_payload_unread()?;
-        let Some(envelope) = self.info.envelope.as_ref() else {
-            return Ok(SignatureVerification {
-                status: SignatureStatus::Unsigned,
-                certificate: None,
-            });
-        };
-        let Some(key) = key else {
-            return Ok(SignatureVerification {
-                status: SignatureStatus::KeyMissing,
-                certificate: Some(envelope.certificate),
-            });
-        };
-        if key.size() != envelope.certificate.signature_len() {
-            return Ok(SignatureVerification {
-                status: SignatureStatus::KeyMismatch,
-                certificate: Some(envelope.certificate),
-            });
-        }
-
-        let verification = with_preserved_position(&mut self.reader, |reader| {
-            let signed_bytes =
-                std::io::Cursor::new(self.info.raw_inner_header.as_slice()).chain(reader);
-            key.verify_reader(signed_bytes, &envelope.signature)
-        })?;
-        let status = if verification {
-            SignatureStatus::Valid
-        } else {
-            SignatureStatus::Invalid
-        };
-        Ok(SignatureVerification {
-            status,
-            certificate: Some(envelope.certificate),
-        })
+fn verify_signature<R: Read + Seek>(
+    package: &mut PackageReader<R>,
+    context: &VerificationContext,
+) -> Result<SignatureCheck> {
+    let Some(envelope) = package.info.envelope.as_ref() else {
+        return Ok(SignatureCheck::Unsigned);
+    };
+    let certificate = envelope.certificate;
+    let Some(key) = context.package_key(certificate) else {
+        return Ok(SignatureCheck::MissingKey { certificate });
+    };
+    if key.size() != certificate.signature_len() {
+        return Ok(SignatureCheck::KeyMismatch { certificate });
     }
+    let valid = with_preserved_position(&mut package.reader, |reader| {
+        let signed_bytes =
+            std::io::Cursor::new(package.info.raw_inner_header.as_slice()).chain(reader);
+        key.verify_reader(signed_bytes, &envelope.signature)
+    })?;
+    Ok(if valid {
+        SignatureCheck::Valid { certificate }
+    } else {
+        SignatureCheck::Invalid { certificate }
+    })
+}
 
-    fn ensure_payload_unread(&self) -> Result<()> {
-        if self.payload_consumed {
-            return Err(Error::InvalidField {
-                field: "payload position",
-                message: "verification must run before copying the payload".to_owned(),
-            });
+fn verify_archive<R: Read + Seek>(
+    package: &mut PackageReader<R>,
+    context: &VerificationContext,
+    policy: VerificationPolicy,
+    payload: &mut PayloadIntegrityCheck,
+) -> Result<ArchiveCheck> {
+    let descriptor = package.info();
+    let Some(kind) = descriptor.archive_kind() else {
+        return Ok(ArchiveCheck::NotArchive);
+    };
+    let storage = descriptor.magic().profile().payload_storage;
+    let gzip_magic = match descriptor.header() {
+        PackageHeader::Userdata { magic } => Some(*magic),
+        _ => None,
+    };
+    let expected_component = descriptor.header().component_sha256();
+    let mut decoded = with_preserved_position(&mut package.reader, |reader| {
+        let mut decoded = tempfile::tempfile()?;
+        if let Some(magic) = gzip_magic {
+            decoded.write_all(&magic)?;
         }
-        Ok(())
+        match storage {
+            PayloadStorage::Mangled => {
+                copy_demangled(reader, &mut decoded)?;
+            }
+            PayloadStorage::Raw => {
+                io::copy(reader, &mut decoded)?;
+            }
+        }
+        Ok(decoded)
+    })?;
+    decoded.seek(SeekFrom::Start(0))?;
+    let report =
+        match UpdateArchiveVerifier::new(kind, policy, context.archive_key(), context.limits())
+            .verify(decoded)
+        {
+            Ok(report) => report,
+            Err(Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof
+                ) =>
+            {
+                return Ok(ArchiveCheck::Invalid);
+            }
+            Err(error) => return Err(error),
+        };
+    if let Some(expected) = expected_component {
+        *payload = match report.component_content() {
+            ComponentContentCheck::Unique(actual) if actual == expected => {
+                PayloadIntegrityCheck::ComponentValid { digest: actual }
+            }
+            ComponentContentCheck::Unique(actual) => {
+                PayloadIntegrityCheck::ComponentInvalid { expected, actual }
+            }
+            ComponentContentCheck::Ambiguous { candidates } => {
+                PayloadIntegrityCheck::ComponentAmbiguous { candidates }
+            }
+            ComponentContentCheck::NotApplicable => PayloadIntegrityCheck::UnsupportedScope,
+        };
     }
+    Ok(if report.is_valid() {
+        ArchiveCheck::Valid
+    } else {
+        ArchiveCheck::Invalid
+    })
 }
 
 fn with_preserved_position<R: Seek, T>(
@@ -272,7 +509,7 @@ fn with_preserved_position<R: Seek, T>(
 }
 
 /// Streaming Kindle package writer.
-pub struct PackageWriter<W> {
+struct PackageWriter<W> {
     writer: W,
 }
 
@@ -296,7 +533,7 @@ impl<W: Write> PackageWriter<W> {
 
         let mut inner = tempfile::tempfile()?;
         match spec {
-            PackageSpec::SignedUserdata => {
+            PackageSpec::Userdata(_) => {
                 payload.seek(SeekFrom::Start(0))?;
                 io::copy(payload, &mut inner)?;
             }
@@ -320,43 +557,40 @@ impl<W: Write> PackageWriter<W> {
         written += io::copy(&mut inner, &mut self.writer)?;
         Ok(written)
     }
-
-    /// Return the wrapped output stream.
-    #[must_use]
-    pub fn into_inner(self) -> W {
-        self.writer
-    }
 }
 
 fn parse_inner_header<R: Read>(
     reader: &mut R,
     magic: BundleMagic,
-    options: ParseOptions,
+    options: ParseLimits,
 ) -> Result<(PackageHeader, Vec<u8>)> {
-    match magic {
-        BundleMagic::Fc02 | BundleMagic::Fd03 => {
+    match magic.profile().layout {
+        HeaderLayout::OtaV1 => {
             let raw = read_vec(reader, OTA_V1_HEADER_LEN, "OTA V1 header")?;
             Ok((parse_ota_v1(magic, &raw)?, raw))
         }
-        BundleMagic::Fc04 | BundleMagic::Fd04 | BundleMagic::Fl01 => {
+        HeaderLayout::OtaV2 => {
             let (header, raw) = parse_ota_v2(reader, magic, options)?;
             Ok((PackageHeader::OtaV2(header), raw))
         }
-        BundleMagic::Fb01 | BundleMagic::Fb02 => {
+        HeaderLayout::RecoveryV1 => {
             let raw = read_vec(reader, RECOVERY_HEADER_LEN, "recovery header")?;
             Ok((parse_recovery_v1(magic, &raw)?, raw))
         }
-        BundleMagic::Fb03 => {
+        HeaderLayout::RecoveryV2 => {
             let raw = read_vec(reader, RECOVERY_HEADER_LEN, "recovery V2 header")?;
             Ok((parse_recovery_v2(&raw)?, raw))
         }
-        BundleMagic::Cb01 => {
+        HeaderLayout::Component => {
             let raw = read_vec(reader, RECOVERY_HEADER_LEN, "component header")?;
             Ok((parse_component(&raw)?, raw))
         }
-        BundleMagic::Gzip(bytes) => Ok((PackageHeader::Userdata { magic: bytes }, Vec::new())),
-        BundleMagic::Zip => Ok((PackageHeader::Android, Vec::new())),
-        BundleMagic::Sp01 => Err(Error::InvalidField {
+        HeaderLayout::Raw => match magic {
+            BundleMagic::Gzip(bytes) => Ok((PackageHeader::Userdata { magic: bytes }, Vec::new())),
+            BundleMagic::Zip => Ok((PackageHeader::Android, Vec::new())),
+            _ => unreachable!("raw layout is only used by gzip and ZIP"),
+        },
+        HeaderLayout::Envelope => Err(Error::InvalidField {
             field: "signature envelope",
             message: "nested SP01 envelope".to_owned(),
         }),
@@ -370,7 +604,8 @@ fn parse_ota_v1(magic: BundleMagic, raw: &[u8]) -> Result<PackageHeader> {
     let device = DeviceCode(cursor.u16("device")?);
     let optional = cursor.u8("optional")?;
     let _unused = cursor.u8("unused")?;
-    let md5 = decode_obfuscated_hex(cursor.take(32, "MD5")?, 32, "MD5")?;
+    let md5 = Md5Digest::from_str(&decode_obfuscated_hex(cursor.take(32, "MD5")?, 32, "MD5")?)?;
+    FirmwareRange::new(source_revision.into(), target_revision.into())?;
     Ok(PackageHeader::OtaV1(OtaV1Header {
         magic,
         source_revision,
@@ -384,7 +619,7 @@ fn parse_ota_v1(magic: BundleMagic, raw: &[u8]) -> Result<PackageHeader> {
 fn parse_ota_v2<R: Read>(
     reader: &mut R,
     magic: BundleMagic,
-    options: ParseOptions,
+    options: ParseLimits,
 ) -> Result<(OtaV2Header, Vec<u8>)> {
     let mut raw = read_vec(reader, OTA_V2_FIXED_1, "OTA V2 fixed header")?;
     let mut cursor = ByteCursor::new(&raw);
@@ -409,7 +644,8 @@ fn parse_ota_v2<R: Read>(
     let mut cursor = ByteCursor::new(&fixed_2);
     let critical = cursor.u8("critical")?;
     let padding = cursor.u8("padding")?;
-    let md5 = decode_obfuscated_hex(cursor.take(32, "MD5")?, 32, "MD5")?;
+    let md5 = Md5Digest::from_str(&decode_obfuscated_hex(cursor.take(32, "MD5")?, 32, "MD5")?)?;
+    FirmwareRange::new(source_revision.into(), target_revision.into())?;
     let metadata_count = usize::from(cursor.u16("metadata count")?);
     if metadata_count > options.max_metadata_items {
         return Err(invalid(
@@ -468,7 +704,11 @@ fn parse_recovery_v1(magic: BundleMagic, raw: &[u8]) -> Result<PackageHeader> {
         Ok(PackageHeader::RecoveryV1(RecoveryV1Header {
             magic,
             target_revision: Some(le_u64_at(raw, 4, "target revision")?),
-            md5: decode_obfuscated_hex(slice_at(raw, 12, 32, "MD5")?, 32, "MD5")?,
+            md5: Md5Digest::from_str(&decode_obfuscated_hex(
+                slice_at(raw, 12, 32, "MD5")?,
+                32,
+                "MD5",
+            )?)?,
             magic_1: le_u32_at(raw, 44, "magic 1")?,
             magic_2: le_u32_at(raw, 48, "magic 2")?,
             minor: le_u32_at(raw, 52, "minor")?,
@@ -481,7 +721,11 @@ fn parse_recovery_v1(magic: BundleMagic, raw: &[u8]) -> Result<PackageHeader> {
         Ok(PackageHeader::RecoveryV1(RecoveryV1Header {
             magic,
             target_revision: None,
-            md5: decode_obfuscated_hex(slice_at(raw, 12, 32, "MD5")?, 32, "MD5")?,
+            md5: Md5Digest::from_str(&decode_obfuscated_hex(
+                slice_at(raw, 12, 32, "MD5")?,
+                32,
+                "MD5",
+            )?)?,
             magic_1: le_u32_at(raw, 44, "magic 1")?,
             magic_2: le_u32_at(raw, 48, "magic 2")?,
             minor: le_u32_at(raw, 52, "minor")?,
@@ -508,7 +752,11 @@ fn parse_recovery_v2(raw: &[u8]) -> Result<PackageHeader> {
         .collect::<Result<Vec<_>>>()?;
     Ok(PackageHeader::RecoveryV2(RecoveryV2Header {
         target_revision: le_u64_at(raw, 4, "target revision")?,
-        md5: decode_obfuscated_hex(slice_at(raw, 12, 32, "MD5")?, 32, "MD5")?,
+        md5: Md5Digest::from_str(&decode_obfuscated_hex(
+            slice_at(raw, 12, 32, "MD5")?,
+            32,
+            "MD5",
+        )?)?,
         magic_1: le_u32_at(raw, 44, "magic 1")?,
         magic_2: le_u32_at(raw, 48, "magic 2")?,
         minor: le_u32_at(raw, 52, "minor")?,
@@ -536,7 +784,11 @@ fn parse_component(raw: &[u8]) -> Result<PackageHeader> {
     Ok(PackageHeader::Component(ComponentHeader {
         minimum_revision: le_u64_at(raw, 0, "minimum revision")?,
         target_revision: le_u64_at(raw, 8, "target revision")?,
-        sha256: decode_clear_hex(slice_at(raw, 16, 64, "SHA-256")?, 64, "SHA-256")?,
+        sha256: crate::Sha256Digest::from_str(&decode_clear_hex(
+            slice_at(raw, 16, 64, "SHA-256")?,
+            64,
+            "SHA-256",
+        )?)?,
         component: le_u32_at(raw, 80, "component")?,
         platform: Platform(le_u32_at(raw, 84, "platform")?),
         header_revision: le_u32_at(raw, 88, "header revision")?,
@@ -579,13 +831,14 @@ fn encode_header(spec: &PackageSpec, payload_md5: &str) -> Result<Vec<u8>> {
     mangle(&mut encoded_hash);
     match spec {
         PackageSpec::OtaV1(header) => {
-            if !matches!(header.magic, BundleMagic::Fc02 | BundleMagic::Fd03) {
-                return Err(invalid("bundle", "OTA V1 requires FC02 or FD03"));
-            }
             let mut output = Vec::with_capacity(4 + OTA_V1_HEADER_LEN);
-            output.extend_from_slice(&header.magic.as_bytes());
-            output.extend_from_slice(&header.source_revision.to_le_bytes());
-            output.extend_from_slice(&header.target_revision.to_le_bytes());
+            output.extend_from_slice(&header.kind.magic().as_bytes());
+            let source_revision = u32::try_from(header.revisions.minimum().get())
+                .map_err(|_| invalid("source revision", "value exceeds OTA V1"))?;
+            let target_revision = u32::try_from(header.revisions.maximum().get())
+                .map_err(|_| invalid("target revision", "value exceeds OTA V1"))?;
+            output.extend_from_slice(&source_revision.to_le_bytes());
+            output.extend_from_slice(&target_revision.to_le_bytes());
             output.extend_from_slice(&header.device.0.to_le_bytes());
             output.push(header.optional);
             output.push(0);
@@ -594,35 +847,29 @@ fn encode_header(spec: &PackageSpec, payload_md5: &str) -> Result<Vec<u8>> {
             Ok(output)
         }
         PackageSpec::OtaV2(header) => encode_ota_v2(header, &encoded_hash),
-        PackageSpec::RecoveryV1(header) => encode_recovery_v1(header, &encoded_hash),
+        PackageSpec::RecoveryV1(header) => Ok(encode_recovery_v1(header, &encoded_hash)),
         PackageSpec::RecoveryV2(header) => encode_recovery_v2(header, &encoded_hash),
-        PackageSpec::SignedUserdata => Err(Error::Unsupported(
-            "signed userdata does not have an inner Kindle header",
-        )),
+        PackageSpec::Userdata(_) => Err(Error::UnsupportedFormat {
+            operation: "encode userdata inner header",
+        }),
     }
 }
 
-fn encode_ota_v2(header: &OtaV2Header, encoded_hash: &[u8]) -> Result<Vec<u8>> {
-    if !matches!(
-        header.magic,
-        BundleMagic::Fc04 | BundleMagic::Fd04 | BundleMagic::Fl01
-    ) {
-        return Err(invalid("bundle", "OTA V2 requires FC04, FD04, or FL01"));
-    }
+fn encode_ota_v2(header: &OtaV2Spec, encoded_hash: &[u8]) -> Result<Vec<u8>> {
     let count = u16::try_from(header.devices.len())
         .map_err(|_| invalid("devices", "OTA V2 supports at most 65535 devices"))?;
     let metadata_count = u16::try_from(header.metadata.len())
         .map_err(|_| invalid("metadata", "OTA V2 supports at most 65535 entries"))?;
     let mut output = Vec::new();
-    output.extend_from_slice(&header.magic.as_bytes());
-    output.extend_from_slice(&header.source_revision.to_le_bytes());
-    output.extend_from_slice(&header.target_revision.to_le_bytes());
+    output.extend_from_slice(&header.kind.magic().as_bytes());
+    output.extend_from_slice(&header.revisions.minimum().get().to_le_bytes());
+    output.extend_from_slice(&header.revisions.maximum().get().to_le_bytes());
     output.extend_from_slice(&count.to_le_bytes());
     for device in &header.devices {
         output.extend_from_slice(&device.0.to_le_bytes());
     }
     output.push(header.critical);
-    output.push(header.padding);
+    output.push(0);
     output.extend_from_slice(encoded_hash);
     output.extend_from_slice(&metadata_count.to_le_bytes());
     for metadata in &header.metadata {
@@ -636,21 +883,16 @@ fn encode_ota_v2(header: &OtaV2Header, encoded_hash: &[u8]) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-fn encode_recovery_v1(spec: &RecoveryV1Spec, encoded_hash: &[u8]) -> Result<Vec<u8>> {
+fn encode_recovery_v1(spec: &RecoveryV1Spec, encoded_hash: &[u8]) -> Vec<u8> {
     let mut output = vec![0_u8; 4 + RECOVERY_HEADER_LEN];
-    let magic = match spec {
-        RecoveryV1Spec::Legacy { magic, .. } => {
-            if !matches!(magic, BundleMagic::Fb01 | BundleMagic::Fb02) {
-                return Err(invalid("bundle", "recovery V1 requires FB01 or FB02"));
-            }
-            *magic
-        }
-        RecoveryV1Spec::Revision2 { .. } => BundleMagic::Fb02,
+    let magic = match spec.layout() {
+        RecoveryV1Layout::Legacy { kind, .. } => kind.magic(),
+        RecoveryV1Layout::Revision2 { .. } => BundleMagic::Fb02,
     };
     output[0..4].copy_from_slice(&magic.as_bytes());
     let raw = &mut output[4..];
-    match spec {
-        RecoveryV1Spec::Legacy {
+    match spec.layout() {
+        RecoveryV1Layout::Legacy {
             magic_1,
             magic_2,
             minor,
@@ -663,7 +905,7 @@ fn encode_recovery_v1(spec: &RecoveryV1Spec, encoded_hash: &[u8]) -> Result<Vec<
             raw[52..56].copy_from_slice(&minor.to_le_bytes());
             raw[56..60].copy_from_slice(&device.to_le_bytes());
         }
-        RecoveryV1Spec::Revision2 {
+        RecoveryV1Layout::Revision2 {
             target_revision,
             magic_1,
             magic_2,
@@ -671,7 +913,7 @@ fn encode_recovery_v1(spec: &RecoveryV1Spec, encoded_hash: &[u8]) -> Result<Vec<
             platform,
             board,
         } => {
-            raw[4..12].copy_from_slice(&target_revision.to_le_bytes());
+            raw[4..12].copy_from_slice(&target_revision.get().to_le_bytes());
             raw[12..44].copy_from_slice(encoded_hash);
             raw[44..48].copy_from_slice(&magic_1.to_le_bytes());
             raw[48..52].copy_from_slice(&magic_2.to_le_bytes());
@@ -681,10 +923,10 @@ fn encode_recovery_v1(spec: &RecoveryV1Spec, encoded_hash: &[u8]) -> Result<Vec<
             raw[64..68].copy_from_slice(&board.0.to_le_bytes());
         }
     }
-    Ok(output)
+    output
 }
 
-fn encode_recovery_v2(header: &RecoveryV2Header, encoded_hash: &[u8]) -> Result<Vec<u8>> {
+fn encode_recovery_v2(header: &RecoveryV2Spec, encoded_hash: &[u8]) -> Result<Vec<u8>> {
     let count = u8::try_from(header.devices.len())
         .map_err(|_| invalid("devices", "recovery V2 supports at most 255 devices"))?;
     let last = 76_usize
@@ -696,7 +938,7 @@ fn encode_recovery_v2(header: &RecoveryV2Header, encoded_hash: &[u8]) -> Result<
     let mut output = vec![0_u8; 4 + RECOVERY_HEADER_LEN];
     output[0..4].copy_from_slice(b"FB03");
     let raw = &mut output[4..];
-    raw[4..12].copy_from_slice(&header.target_revision.to_le_bytes());
+    raw[4..12].copy_from_slice(&header.target_revision.get().to_le_bytes());
     raw[12..44].copy_from_slice(encoded_hash);
     raw[44..48].copy_from_slice(&header.magic_1.to_le_bytes());
     raw[48..52].copy_from_slice(&header.magic_2.to_le_bytes());
@@ -846,29 +1088,32 @@ impl<'input> ByteCursor<'input> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PackageReader, PackageWriter, ParseOptions, PayloadIntegrityStatus, SigningConfiguration,
-        WriteOptions,
+        PackageReader, PackageWriter, ParseLimits, SigningConfiguration, WriteOptions,
+        verify_payload_integrity,
     };
+    use crate::PayloadIntegrityCheck;
     use crate::crypto::SigningKey;
     use crate::devices::DeviceCode;
     use crate::model::{
-        Board, BundleMagic, Certificate, OtaV1Header, OtaV2Header, PackageHeader, PackageSpec,
-        Platform, RECOVERY_HEADER_LEN, RecoveryV1Spec, RecoveryV2Header,
+        Board, BundleMagic, Certificate, OtaV1Kind, OtaV1Spec, OtaV2Kind, OtaV2Spec, PackageHeader,
+        PackageSpec, Platform, RECOVERY_HEADER_LEN, RecoveryV1Kind, RecoveryV1Spec, RecoveryV2Spec,
+        UserdataSpec,
     };
+    use crate::values::{FirmwareRange, FirmwareRevision};
     use std::io::Cursor;
 
     #[test]
     fn ota_v2_round_trip() {
-        let spec = PackageSpec::OtaV2(OtaV2Header {
-            magic: BundleMagic::Fd04,
-            source_revision: 0,
-            target_revision: u64::MAX,
-            devices: vec![DeviceCode(0x201), DeviceCode(0xC6)],
-            critical: 0,
-            padding: 0,
-            md5: String::new(),
-            metadata: vec![b"PackageName=test".to_vec()],
-        });
+        let spec = PackageSpec::OtaV2(
+            OtaV2Spec::new(
+                OtaV2Kind::Versionless,
+                revision_range(0, u64::MAX),
+                vec![DeviceCode(0x201), DeviceCode(0xC6)],
+                0,
+                vec![b"PackageName=test".to_vec()],
+            )
+            .unwrap(),
+        );
         let payload = b"payload".to_vec();
         let mut package = Vec::new();
         PackageWriter::new(&mut package)
@@ -903,25 +1148,17 @@ mod tests {
         let payload = b"round-trip payload";
         let cases = vec![
             (
-                PackageSpec::OtaV1(OtaV1Header {
-                    magic: BundleMagic::Fc02,
-                    source_revision: 0x0102_0304,
-                    target_revision: 0xF1F2_F3F4,
-                    device: DeviceCode(0x201),
-                    optional: 7,
-                    md5: String::new(),
-                }),
+                ota_v1_spec(
+                    OtaV1Kind::Ota,
+                    0x0102_0304,
+                    0xF1F2_F3F4,
+                    DeviceCode(0x201),
+                    7,
+                ),
                 BundleMagic::Fc02,
             ),
             (
-                PackageSpec::OtaV1(OtaV1Header {
-                    magic: BundleMagic::Fd03,
-                    source_revision: 1,
-                    target_revision: 2,
-                    device: DeviceCode(0xFFFF),
-                    optional: 0,
-                    md5: String::new(),
-                }),
+                ota_v1_spec(OtaV1Kind::Versionless, 1, 2, DeviceCode(0xFFFF), 0),
                 BundleMagic::Fd03,
             ),
             (ota_v2_spec(BundleMagic::Fc04), BundleMagic::Fc04),
@@ -941,8 +1178,10 @@ mod tests {
             let mut reader = PackageReader::new(Cursor::new(package)).unwrap();
             assert_eq!(reader.info().header.magic(), expected_magic);
             assert_eq!(
-                reader.verify_payload_integrity().unwrap(),
-                PayloadIntegrityStatus::Valid
+                verify_payload_integrity(&mut reader).unwrap(),
+                PayloadIntegrityCheck::Valid {
+                    digest: reader.info().header.payload_digest().unwrap()
+                }
             );
             let mut decoded = Vec::new();
             reader.copy_decoded_payload(&mut decoded, false).unwrap();
@@ -964,7 +1203,7 @@ mod tests {
         let mut package = Vec::new();
         PackageWriter::new(&mut package)
             .write(
-                &PackageSpec::SignedUserdata,
+                &PackageSpec::Userdata(UserdataSpec),
                 &mut Cursor::new(payload),
                 options,
             )
@@ -1053,11 +1292,11 @@ mod tests {
         package[metadata_count_offset..metadata_count_offset + 2]
             .copy_from_slice(&4097_u16.to_le_bytes());
         assert!(
-            PackageReader::with_options(
+            PackageReader::with_limits(
                 Cursor::new(package),
-                ParseOptions {
+                ParseLimits {
                     max_metadata_items: 4096,
-                    ..ParseOptions::default()
+                    ..ParseLimits::default()
                 },
             )
             .is_err()
@@ -1075,11 +1314,11 @@ mod tests {
             )
             .unwrap();
         assert!(
-            PackageReader::with_options(
+            PackageReader::with_limits(
                 Cursor::new(package),
-                ParseOptions {
+                ParseLimits {
                     max_metadata_bytes: 8,
-                    ..ParseOptions::default()
+                    ..ParseLimits::default()
                 },
             )
             .is_err()
@@ -1095,51 +1334,84 @@ mod tests {
         assert!(PackageReader::new(Cursor::new(package)).is_err());
     }
 
+    fn ota_v1_spec(
+        kind: OtaV1Kind,
+        minimum: u64,
+        maximum: u64,
+        device: DeviceCode,
+        optional: u8,
+    ) -> PackageSpec {
+        PackageSpec::OtaV1(
+            OtaV1Spec::new(kind, revision_range(minimum, maximum), device, optional).unwrap(),
+        )
+    }
+
     fn ota_v2_spec(magic: BundleMagic) -> PackageSpec {
-        PackageSpec::OtaV2(OtaV2Header {
-            magic,
-            source_revision: 0x0102_0304_0506_0708,
-            target_revision: 0xF1F2_F3F4_F5F6_F7F8,
-            devices: vec![DeviceCode(0x201), DeviceCode(0xFFFF)],
-            critical: 3,
-            padding: 0xA5,
-            md5: String::new(),
-            metadata: vec![b"PackageName=roundtrip".to_vec()],
-        })
+        let kind = match magic {
+            BundleMagic::Fc04 => OtaV2Kind::Ota,
+            BundleMagic::Fd04 => OtaV2Kind::Versionless,
+            BundleMagic::Fl01 => OtaV2Kind::Language,
+            _ => panic!("not an OTA V2 magic"),
+        };
+        PackageSpec::OtaV2(
+            OtaV2Spec::new(
+                kind,
+                revision_range(0x0102_0304_0506_0708, 0xF1F2_F3F4_F5F6_F7F8),
+                vec![DeviceCode(0x201), DeviceCode(0xFFFF)],
+                3,
+                vec![b"PackageName=roundtrip".to_vec()],
+            )
+            .unwrap(),
+        )
     }
 
     fn recovery_v1_spec(magic: BundleMagic, header_revision: u32) -> PackageSpec {
         if header_revision == 2 {
-            PackageSpec::RecoveryV1(RecoveryV1Spec::Revision2 {
-                target_revision: 0x0102_0304_0506_0708,
-                magic_1: 0x1122_3344,
-                magic_2: 0x5566_7788,
-                minor: 9,
-                platform: Platform(12),
-                board: Board(5),
-            })
+            PackageSpec::RecoveryV1(RecoveryV1Spec::revision2(
+                FirmwareRevision::new(0x0102_0304_0506_0708),
+                0x1122_3344,
+                0x5566_7788,
+                9,
+                Platform(12),
+                Board(5),
+            ))
         } else {
-            PackageSpec::RecoveryV1(RecoveryV1Spec::Legacy {
-                magic,
-                magic_1: 0x1122_3344,
-                magic_2: 0x5566_7788,
-                minor: 9,
-                device: 0x201,
-            })
+            let kind = if magic == BundleMagic::Fb01 {
+                RecoveryV1Kind::Fb01
+            } else {
+                RecoveryV1Kind::Fb02
+            };
+            PackageSpec::RecoveryV1(RecoveryV1Spec::legacy(
+                kind,
+                0x1122_3344,
+                0x5566_7788,
+                9,
+                0x201,
+            ))
         }
     }
 
     fn recovery_v2_spec() -> PackageSpec {
-        PackageSpec::RecoveryV2(RecoveryV2Header {
-            target_revision: 0x0102_0304_0506_0708,
-            md5: String::new(),
-            magic_1: 1,
-            magic_2: 2,
-            minor: 3,
-            platform: Platform(12),
-            header_revision: 0,
-            board: Board(0),
-            devices: vec![DeviceCode(0x0E75), DeviceCode(0xFFFF)],
-        })
+        PackageSpec::RecoveryV2(
+            RecoveryV2Spec::new(
+                FirmwareRevision::new(0x0102_0304_0506_0708),
+                1,
+                2,
+                3,
+                Platform(12),
+                0,
+                Board(0),
+                vec![DeviceCode(0x0E75), DeviceCode(0xFFFF)],
+            )
+            .unwrap(),
+        )
+    }
+
+    fn revision_range(minimum: u64, maximum: u64) -> FirmwareRange {
+        FirmwareRange::new(
+            FirmwareRevision::new(minimum),
+            FirmwareRevision::new(maximum),
+        )
+        .unwrap()
     }
 }

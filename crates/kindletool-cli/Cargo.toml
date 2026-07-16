@@ -16,6 +16,7 @@ doc = false
 [dependencies]
 clap.workspace = true
 kindletool = { path = "../kindletool" }
+serde_json.workspace = true
 tempfile.workspace = true
 
 [lints]

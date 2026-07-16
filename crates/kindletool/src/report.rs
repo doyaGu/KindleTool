@@ -1,10 +1,10 @@
 use crate::devices::{DeviceCatalog, DeviceCode};
-use crate::model::{BundleMagic, PackageHeader, PackageInfo};
+use crate::model::{BundleMagic, PackageDescriptor, PackageHeader};
 use std::fmt::Write;
 
 /// Render package information in `KindleTool`'s traditional human-readable form.
 #[must_use]
-pub fn render_package_info(info: &PackageInfo, include_codes: bool) -> String {
+pub fn render_package_info(info: &PackageDescriptor, include_codes: bool) -> String {
     let mut output = String::new();
     if let Some(envelope) = &info.envelope {
         bundle_line(&mut output, BundleMagic::Sp01);
@@ -113,7 +113,7 @@ pub fn render_package_info(info: &PackageInfo, include_codes: bool) -> String {
 
 /// Render the legacy shell-friendly metadata assignment stream.
 #[must_use]
-pub fn render_shell_metadata(info: &PackageInfo) -> String {
+pub fn render_shell_metadata(info: &PackageDescriptor) -> String {
     let header = &info.header;
     let mut fields = vec![
         ("pkgBundleMagic", header.magic().to_string()),
@@ -126,7 +126,7 @@ pub fn render_shell_metadata(info: &PackageInfo) -> String {
                 ("pkgTargetOTA", value.target_revision.to_string()),
                 ("pkgDeviceCodes", value.device.0.to_string()),
                 ("pkgDeviceSNs", value.device.serial_code()),
-                ("pkgMD5Hash", value.md5.clone()),
+                ("pkgMD5Hash", value.md5.to_string()),
                 ("pkgOptional", value.optional.to_string()),
                 (
                     "pkgPaddingByte",
@@ -147,13 +147,13 @@ pub fn render_shell_metadata(info: &PackageInfo) -> String {
                 ("pkgDeviceSNs", device_serials(&value.devices)),
                 ("pkgCritical", value.critical.to_string()),
                 ("pkgPaddingByte", value.padding.to_string()),
-                ("pkgMD5Hash", value.md5.clone()),
+                ("pkgMD5Hash", value.md5.to_string()),
                 ("pkgMetadataStrings", value.metadata.len().to_string()),
             ]);
         }
         PackageHeader::RecoveryV1(value) => {
             fields.extend([
-                ("pkgMD5Hash", value.md5.clone()),
+                ("pkgMD5Hash", value.md5.to_string()),
                 ("pkgMagic1", value.magic_1.to_string()),
                 ("pkgMagic2", value.magic_2.to_string()),
                 ("pkgMinor", value.minor.to_string()),
@@ -182,7 +182,7 @@ pub fn render_shell_metadata(info: &PackageInfo) -> String {
         PackageHeader::RecoveryV2(value) => {
             fields.extend([
                 ("pkgTargetOTA", value.target_revision.to_string()),
-                ("pkgMD5Hash", value.md5.clone()),
+                ("pkgMD5Hash", value.md5.to_string()),
                 ("pkgMagic1", value.magic_1.to_string()),
                 ("pkgMagic2", value.magic_2.to_string()),
                 ("pkgMinor", value.minor.to_string()),
@@ -200,7 +200,7 @@ pub fn render_shell_metadata(info: &PackageInfo) -> String {
             fields.extend([
                 ("pkgMinOTA", value.minimum_revision.to_string()),
                 ("pkgTargetOTA", value.target_revision.to_string()),
-                ("pkgSHA256Hash", value.sha256.clone()),
+                ("pkgSHA256Hash", value.sha256.to_string()),
                 ("pkgComponent", value.component.to_string()),
                 ("pkgPlatform", value.platform.0.to_string()),
                 ("pkgPlatformName", value.platform.name().to_owned()),

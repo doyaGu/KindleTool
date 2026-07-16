@@ -6,15 +6,43 @@ use md5::{Digest, Md5};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SerialInfo {
     /// Recognized device code.
-    pub device: DeviceCode,
+    pub(crate) device: DeviceCode,
     /// Human-readable model name.
-    pub device_name: &'static str,
+    pub(crate) device_name: &'static str,
     /// Whether `KindleTool` considers the model Wario-generation or newer.
-    pub wario_or_newer: bool,
+    pub(crate) wario_or_newer: bool,
     /// Default eight-character root password.
-    pub root_password: String,
+    pub(crate) root_password: String,
     /// Nine-character recovery/MMC password.
-    pub recovery_password: String,
+    pub(crate) recovery_password: String,
+}
+
+impl SerialInfo {
+    /// Recognized device code.
+    #[must_use]
+    pub const fn device(&self) -> DeviceCode {
+        self.device
+    }
+    /// Human-readable model name.
+    #[must_use]
+    pub const fn device_name(&self) -> &'static str {
+        self.device_name
+    }
+    /// Whether this model uses the Wario-or-newer password offset.
+    #[must_use]
+    pub const fn wario_or_newer(&self) -> bool {
+        self.wario_or_newer
+    }
+    /// Default root password.
+    #[must_use]
+    pub fn root_password(&self) -> &str {
+        &self.root_password
+    }
+    /// Recovery/MMC password.
+    #[must_use]
+    pub fn recovery_password(&self) -> &str {
+        &self.recovery_password
+    }
 }
 
 /// Derive default Kindle passwords and model information from a 16-character serial number.

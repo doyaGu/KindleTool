@@ -1,4 +1,6 @@
 use crate::devices::DeviceCode;
+use crate::format::{ArchiveKind, PackageFormat};
+use crate::values::{FirmwareRange, FirmwareRevision, Md5Digest, Sha256Digest};
 use crate::{Error, Result};
 use std::fmt;
 use std::str::FromStr;
@@ -41,77 +43,11 @@ pub enum BundleMagic {
     Zip,
 }
 
-struct MagicRecord {
-    magic: BundleMagic,
-    bytes: [u8; 4],
-    description: &'static str,
-}
-
-const MAGIC_CATALOG: &[MagicRecord] = &[
-    MagicRecord {
-        magic: BundleMagic::Fb01,
-        bytes: *b"FB01",
-        description: "(Fullbin)",
-    },
-    MagicRecord {
-        magic: BundleMagic::Fb02,
-        bytes: *b"FB02",
-        description: "(Fullbin [signed?])",
-    },
-    MagicRecord {
-        magic: BundleMagic::Fb03,
-        bytes: *b"FB03",
-        description: "(Fullbin [OTA?, fwo?])",
-    },
-    MagicRecord {
-        magic: BundleMagic::Fc02,
-        bytes: *b"FC02",
-        description: "(OTA [ota])",
-    },
-    MagicRecord {
-        magic: BundleMagic::Fc04,
-        bytes: *b"FC04",
-        description: "(OTA [ota])",
-    },
-    MagicRecord {
-        magic: BundleMagic::Fd03,
-        bytes: *b"FD03",
-        description: "(Versionless [vls])",
-    },
-    MagicRecord {
-        magic: BundleMagic::Fd04,
-        bytes: *b"FD04",
-        description: "(Versionless [vls])",
-    },
-    MagicRecord {
-        magic: BundleMagic::Fl01,
-        bytes: *b"FL01",
-        description: "(Language [lang])",
-    },
-    MagicRecord {
-        magic: BundleMagic::Sp01,
-        bytes: *b"SP01",
-        description: "(Signing Envelope)",
-    },
-    MagicRecord {
-        magic: BundleMagic::Cb01,
-        bytes: *b"CB01",
-        description: "(Component [OTA?])",
-    },
-    MagicRecord {
-        magic: BundleMagic::Zip,
-        bytes: [0x50, 0x4B, 0x03, 0x04],
-        description: "(Android update)",
-    },
-];
-
 impl BundleMagic {
     /// All fixed magic values and their descriptions in catalog order.
     #[must_use]
     pub fn known() -> impl ExactSizeIterator<Item = (Self, &'static str)> {
-        MAGIC_CATALOG
-            .iter()
-            .map(|record| (record.magic, record.description))
+        crate::format::fixed_records().map(|record| (record.magic, record.description))
     }
 
     /// Decode a four-byte magic value.
@@ -119,9 +55,7 @@ impl BundleMagic {
         if matches!(bytes, [0x1F, 0x8B, 0x08, _]) {
             return Ok(Self::Gzip(bytes));
         }
-        MAGIC_CATALOG
-            .iter()
-            .find(|record| record.bytes == bytes)
+        crate::format::by_bytes(bytes)
             .map(|record| record.magic)
             .ok_or(Error::UnknownMagic(bytes))
     }
@@ -132,7 +66,7 @@ impl BundleMagic {
         if let Self::Gzip(bytes) = self {
             bytes
         } else {
-            self.record()
+            crate::format::record(self)
                 .expect("static magic has a catalog entry")
                 .bytes
         }
@@ -144,14 +78,16 @@ impl BundleMagic {
         if matches!(self, Self::Gzip(_)) {
             "(Userdata tarball)"
         } else {
-            self.record()
+            crate::format::record(self)
                 .expect("static magic has a catalog entry")
                 .description
         }
     }
 
-    fn record(self) -> Option<&'static MagicRecord> {
-        MAGIC_CATALOG.iter().find(|record| record.magic == self)
+    /// Data-driven format metadata for this magic.
+    #[must_use]
+    pub fn profile(self) -> &'static crate::format::FormatProfile {
+        crate::format::magic_profile(self)
     }
 }
 
@@ -275,7 +211,7 @@ impl TryFrom<u16> for Certificate {
 
 /// Kindle hardware platform stored in recovery/component headers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Platform(pub u32);
+pub struct Platform(pub(crate) u32);
 
 struct NamedCode {
     code: u32,
@@ -390,6 +326,17 @@ const BOARD_CATALOG: &[NamedCode] = &[
 ];
 
 impl Platform {
+    /// Preserve a raw platform selector, including unknown values.
+    #[must_use]
+    pub const fn from_raw(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Raw on-disk selector.
+    #[must_use]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
     /// All documented platform names and numeric values.
     #[must_use]
     pub fn known() -> impl ExactSizeIterator<Item = (Self, &'static str, &'static str)> {
@@ -422,9 +369,20 @@ impl Platform {
 
 /// Kindle board selector stored in recovery headers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Board(pub u32);
+pub struct Board(pub(crate) u32);
 
 impl Board {
+    /// Preserve a raw board selector, including unknown values.
+    #[must_use]
+    pub const fn from_raw(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Raw on-disk selector.
+    #[must_use]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
     /// All documented board names and numeric values.
     #[must_use]
     pub fn known() -> impl ExactSizeIterator<Item = (Self, &'static str, &'static str)> {
@@ -459,145 +417,603 @@ impl Board {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OtaV1Header {
     /// FC02 or FD03.
-    pub magic: BundleMagic,
+    pub(crate) magic: BundleMagic,
     /// Minimum source firmware revision.
-    pub source_revision: u32,
+    pub(crate) source_revision: u32,
     /// Maximum target firmware revision.
-    pub target_revision: u32,
+    pub(crate) target_revision: u32,
     /// Target device.
-    pub device: DeviceCode,
+    pub(crate) device: DeviceCode,
     /// Optional one-byte policy value.
-    pub optional: u8,
+    pub(crate) optional: u8,
     /// Stored payload MD5 in lowercase hexadecimal.
-    pub md5: String,
+    pub(crate) md5: Md5Digest,
+}
+
+impl OtaV1Header {
+    /// Inclusive firmware range encoded by the header.
+    #[must_use]
+    pub fn firmware_range(&self) -> FirmwareRange {
+        FirmwareRange::new(self.source_revision.into(), self.target_revision.into())
+            .expect("a parsed OTA V1 range is ordered")
+    }
+
+    /// Target device.
+    #[must_use]
+    pub const fn device(&self) -> DeviceCode {
+        self.device
+    }
+
+    /// Optional policy byte.
+    #[must_use]
+    pub const fn optional(&self) -> u8 {
+        self.optional
+    }
+
+    /// Stored decoded-payload digest.
+    #[must_use]
+    pub const fn payload_digest(&self) -> Md5Digest {
+        self.md5
+    }
 }
 
 /// Parsed OTA V2 header.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OtaV2Header {
     /// FC04, FD04, or FL01.
-    pub magic: BundleMagic,
+    pub(crate) magic: BundleMagic,
     /// Minimum source firmware revision.
-    pub source_revision: u64,
+    pub(crate) source_revision: u64,
     /// Maximum target firmware revision.
-    pub target_revision: u64,
+    pub(crate) target_revision: u64,
     /// Target devices in package order.
-    pub devices: Vec<DeviceCode>,
+    pub(crate) devices: Vec<DeviceCode>,
     /// Critical update byte.
-    pub critical: u8,
+    pub(crate) critical: u8,
     /// Header padding byte retained for diagnostics.
-    pub padding: u8,
+    pub(crate) padding: u8,
     /// Stored payload MD5 in lowercase hexadecimal.
-    pub md5: String,
+    pub(crate) md5: Md5Digest,
     /// Raw metadata strings, preserved even if they are not UTF-8.
-    pub metadata: Vec<Vec<u8>>,
+    pub(crate) metadata: Vec<Vec<u8>>,
+}
+
+impl OtaV2Header {
+    /// Inclusive firmware range encoded by the header.
+    #[must_use]
+    pub fn firmware_range(&self) -> FirmwareRange {
+        FirmwareRange::new(self.source_revision.into(), self.target_revision.into())
+            .expect("a parsed OTA V2 range is ordered")
+    }
+
+    /// Target devices in encoded order.
+    #[must_use]
+    pub fn devices(&self) -> &[DeviceCode] {
+        &self.devices
+    }
+
+    /// Critical-update policy byte.
+    #[must_use]
+    pub const fn critical(&self) -> u8 {
+        self.critical
+    }
+
+    /// Reserved padding byte retained from the wire.
+    #[must_use]
+    pub const fn padding(&self) -> u8 {
+        self.padding
+    }
+
+    /// Stored decoded-payload digest.
+    #[must_use]
+    pub const fn payload_digest(&self) -> Md5Digest {
+        self.md5
+    }
+
+    /// Raw metadata entries in encoded order.
+    #[must_use]
+    pub fn metadata(&self) -> &[Vec<u8>] {
+        &self.metadata
+    }
+}
+
+/// OTA V1 wire variant selected for package creation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OtaV1Kind {
+    /// FC02 standard OTA package.
+    Ota,
+    /// FD03 versionless OTA package.
+    Versionless,
+}
+
+impl OtaV1Kind {
+    pub(crate) const fn magic(self) -> BundleMagic {
+        match self {
+            Self::Ota => BundleMagic::Fc02,
+            Self::Versionless => BundleMagic::Fd03,
+        }
+    }
+}
+
+/// Validated OTA V1 creation specification.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OtaV1Spec {
+    pub(crate) kind: OtaV1Kind,
+    pub(crate) revisions: FirmwareRange,
+    pub(crate) device: DeviceCode,
+    pub(crate) optional: u8,
+}
+
+impl OtaV1Spec {
+    /// Construct an OTA V1 specification.
+    pub fn new(
+        kind: OtaV1Kind,
+        revisions: FirmwareRange,
+        device: DeviceCode,
+        optional: u8,
+    ) -> Result<Self> {
+        if revisions.maximum().get() > u64::from(u32::MAX) {
+            return Err(Error::InvalidField {
+                field: "firmware range",
+                message: "OTA V1 revisions must fit in 32 bits".to_owned(),
+            });
+        }
+        Ok(Self {
+            kind,
+            revisions,
+            device,
+            optional,
+        })
+    }
+
+    /// Selected OTA V1 wire variant.
+    #[must_use]
+    pub const fn kind(&self) -> OtaV1Kind {
+        self.kind
+    }
+
+    /// Inclusive supported firmware range.
+    #[must_use]
+    pub const fn revisions(&self) -> FirmwareRange {
+        self.revisions
+    }
+
+    /// Target device.
+    #[must_use]
+    pub const fn device(&self) -> DeviceCode {
+        self.device
+    }
+
+    /// Optional policy byte.
+    #[must_use]
+    pub const fn optional(&self) -> u8 {
+        self.optional
+    }
+}
+
+/// OTA V2 wire variant selected for package creation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OtaV2Kind {
+    /// FC04 standard OTA package.
+    Ota,
+    /// FD04 versionless OTA package.
+    Versionless,
+    /// FL01 language package.
+    Language,
+}
+
+impl OtaV2Kind {
+    pub(crate) const fn magic(self) -> BundleMagic {
+        match self {
+            Self::Ota => BundleMagic::Fc04,
+            Self::Versionless => BundleMagic::Fd04,
+            Self::Language => BundleMagic::Fl01,
+        }
+    }
+}
+
+/// Validated OTA V2 creation specification.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OtaV2Spec {
+    pub(crate) kind: OtaV2Kind,
+    pub(crate) revisions: FirmwareRange,
+    pub(crate) devices: Vec<DeviceCode>,
+    pub(crate) critical: u8,
+    pub(crate) metadata: Vec<Vec<u8>>,
+}
+
+impl OtaV2Spec {
+    /// Construct an OTA V2 specification.
+    pub fn new(
+        kind: OtaV2Kind,
+        revisions: FirmwareRange,
+        devices: Vec<DeviceCode>,
+        critical: u8,
+        metadata: Vec<Vec<u8>>,
+    ) -> Result<Self> {
+        u16::try_from(devices.len()).map_err(|_| Error::InvalidField {
+            field: "devices",
+            message: "OTA V2 supports at most 65535 devices".to_owned(),
+        })?;
+        u16::try_from(metadata.len()).map_err(|_| Error::InvalidField {
+            field: "metadata",
+            message: "OTA V2 supports at most 65535 entries".to_owned(),
+        })?;
+        if metadata
+            .iter()
+            .any(|entry| entry.len() > usize::from(u16::MAX))
+        {
+            return Err(Error::InvalidField {
+                field: "metadata",
+                message: "entry exceeds 65535 bytes".to_owned(),
+            });
+        }
+        Ok(Self {
+            kind,
+            revisions,
+            devices,
+            critical,
+            metadata,
+        })
+    }
+
+    /// Selected OTA V2 wire variant.
+    #[must_use]
+    pub const fn kind(&self) -> OtaV2Kind {
+        self.kind
+    }
+
+    /// Inclusive supported firmware range.
+    #[must_use]
+    pub const fn revisions(&self) -> FirmwareRange {
+        self.revisions
+    }
+
+    /// Target devices in encoded order.
+    #[must_use]
+    pub fn devices(&self) -> &[DeviceCode] {
+        &self.devices
+    }
+
+    /// Critical-update policy byte.
+    #[must_use]
+    pub const fn critical(&self) -> u8 {
+        self.critical
+    }
+
+    /// Raw metadata strings in encoded order.
+    #[must_use]
+    pub fn metadata(&self) -> &[Vec<u8>] {
+        &self.metadata
+    }
 }
 
 /// Parsed recovery V1/FB02 header.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecoveryV1Header {
     /// FB01 or FB02.
-    pub magic: BundleMagic,
+    pub(crate) magic: BundleMagic,
     /// Optional target revision used by header revision 2.
-    pub target_revision: Option<u64>,
+    pub(crate) target_revision: Option<u64>,
     /// Stored payload MD5 in lowercase hexadecimal.
-    pub md5: String,
+    pub(crate) md5: Md5Digest,
     /// Recovery magic value 1.
-    pub magic_1: u32,
+    pub(crate) magic_1: u32,
     /// Recovery magic value 2.
-    pub magic_2: u32,
+    pub(crate) magic_2: u32,
     /// Recovery minor value.
-    pub minor: u32,
+    pub(crate) minor: u32,
     /// Legacy target device for header revisions before 2.
-    pub device: Option<u32>,
+    pub(crate) device: Option<u32>,
     /// Platform used by header revision 2.
-    pub platform: Option<Platform>,
+    pub(crate) platform: Option<Platform>,
     /// Header revision.
-    pub header_revision: u32,
+    pub(crate) header_revision: u32,
     /// Board used by header revision 2.
-    pub board: Option<Board>,
+    pub(crate) board: Option<Board>,
 }
 
-/// Valid creation-time configurations for FB01/FB02 recovery packages.
-///
-/// Keeping the legacy and revision-2 layouts in separate variants makes it impossible to omit a
-/// required device, platform, board, or target revision.
+impl RecoveryV1Header {
+    /// Exact target firmware revision used by revision-2 headers.
+    #[must_use]
+    pub const fn target_revision(&self) -> Option<FirmwareRevision> {
+        match self.target_revision {
+            Some(value) => Some(FirmwareRevision::new(value)),
+            None => None,
+        }
+    }
+
+    /// Stored decoded-payload digest.
+    #[must_use]
+    pub const fn payload_digest(&self) -> Md5Digest {
+        self.md5
+    }
+
+    /// Legacy numeric device selector.
+    #[must_use]
+    pub const fn legacy_device(&self) -> Option<u32> {
+        self.device
+    }
+
+    /// Platform selector used by revision-2 headers.
+    #[must_use]
+    pub const fn platform(&self) -> Option<Platform> {
+        self.platform
+    }
+
+    /// Board selector used by revision-2 headers.
+    #[must_use]
+    pub const fn board(&self) -> Option<Board> {
+        self.board
+    }
+
+    /// Header revision.
+    #[must_use]
+    pub const fn header_revision(&self) -> u32 {
+        self.header_revision
+    }
+}
+
+/// Legacy recovery wire variant selected for package creation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveryV1Kind {
+    /// FB01 recovery package.
+    Fb01,
+    /// FB02 recovery package.
+    Fb02,
+}
+
+impl RecoveryV1Kind {
+    pub(crate) const fn magic(self) -> BundleMagic {
+        match self {
+            Self::Fb01 => BundleMagic::Fb01,
+            Self::Fb02 => BundleMagic::Fb02,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RecoveryV1Spec {
-    /// Legacy FB01/FB02 recovery header containing one 32-bit device code.
+pub(crate) enum RecoveryV1Layout {
     Legacy {
-        /// FB01 or FB02.
-        magic: BundleMagic,
-        /// Recovery magic value 1.
+        kind: RecoveryV1Kind,
         magic_1: u32,
-        /// Recovery magic value 2.
         magic_2: u32,
-        /// Recovery minor value.
         minor: u32,
-        /// Legacy 32-bit device code.
         device: u32,
     },
-    /// FB02 header revision 2 containing target, platform, and board fields.
     Revision2 {
-        /// Target firmware revision.
-        target_revision: u64,
-        /// Recovery magic value 1.
+        target_revision: FirmwareRevision,
         magic_1: u32,
-        /// Recovery magic value 2.
         magic_2: u32,
-        /// Recovery minor value.
         minor: u32,
-        /// Hardware platform.
         platform: Platform,
-        /// Hardware board.
         board: Board,
     },
+}
+
+/// Validated recovery V1 creation specification.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoveryV1Spec(pub(crate) RecoveryV1Layout);
+
+impl RecoveryV1Spec {
+    /// Construct a legacy FB01/FB02 recovery specification.
+    #[must_use]
+    pub const fn legacy(
+        kind: RecoveryV1Kind,
+        magic_1: u32,
+        magic_2: u32,
+        minor: u32,
+        device: u32,
+    ) -> Self {
+        Self(RecoveryV1Layout::Legacy {
+            kind,
+            magic_1,
+            magic_2,
+            minor,
+            device,
+        })
+    }
+
+    /// Construct an FB02 revision-2 recovery specification.
+    #[must_use]
+    pub const fn revision2(
+        target_revision: FirmwareRevision,
+        magic_1: u32,
+        magic_2: u32,
+        minor: u32,
+        platform: Platform,
+        board: Board,
+    ) -> Self {
+        Self(RecoveryV1Layout::Revision2 {
+            target_revision,
+            magic_1,
+            magic_2,
+            minor,
+            platform,
+            board,
+        })
+    }
+
+    pub(crate) const fn layout(&self) -> &RecoveryV1Layout {
+        &self.0
+    }
+
+    /// Whether this specification uses the FB02 revision-2 layout.
+    #[must_use]
+    pub const fn is_revision2(&self) -> bool {
+        matches!(self.0, RecoveryV1Layout::Revision2 { .. })
+    }
 }
 
 /// Parsed recovery V2 header.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecoveryV2Header {
     /// Target firmware revision.
-    pub target_revision: u64,
+    pub(crate) target_revision: u64,
     /// Stored payload MD5 in lowercase hexadecimal.
-    pub md5: String,
+    pub(crate) md5: Md5Digest,
     /// Recovery magic value 1.
-    pub magic_1: u32,
+    pub(crate) magic_1: u32,
     /// Recovery magic value 2.
-    pub magic_2: u32,
+    pub(crate) magic_2: u32,
     /// Recovery minor value.
-    pub minor: u32,
+    pub(crate) minor: u32,
     /// Hardware platform.
-    pub platform: Platform,
+    pub(crate) platform: Platform,
     /// Header revision.
-    pub header_revision: u32,
+    pub(crate) header_revision: u32,
     /// Hardware board.
-    pub board: Board,
+    pub(crate) board: Board,
     /// Target devices in package order.
-    pub devices: Vec<DeviceCode>,
+    pub(crate) devices: Vec<DeviceCode>,
 }
+
+impl RecoveryV2Header {
+    /// Exact target firmware revision.
+    #[must_use]
+    pub const fn target_revision(&self) -> FirmwareRevision {
+        FirmwareRevision::new(self.target_revision)
+    }
+
+    /// Stored decoded-payload digest.
+    #[must_use]
+    pub const fn payload_digest(&self) -> Md5Digest {
+        self.md5
+    }
+
+    /// Hardware platform.
+    #[must_use]
+    pub const fn platform(&self) -> Platform {
+        self.platform
+    }
+
+    /// Hardware board.
+    #[must_use]
+    pub const fn board(&self) -> Board {
+        self.board
+    }
+
+    /// Target devices in encoded order.
+    #[must_use]
+    pub fn devices(&self) -> &[DeviceCode] {
+        &self.devices
+    }
+}
+
+/// Validated recovery V2 creation specification.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoveryV2Spec {
+    pub(crate) target_revision: FirmwareRevision,
+    pub(crate) magic_1: u32,
+    pub(crate) magic_2: u32,
+    pub(crate) minor: u32,
+    pub(crate) platform: Platform,
+    pub(crate) header_revision: u32,
+    pub(crate) board: Board,
+    pub(crate) devices: Vec<DeviceCode>,
+}
+
+impl RecoveryV2Spec {
+    /// Construct a recovery V2 specification.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        target_revision: FirmwareRevision,
+        magic_1: u32,
+        magic_2: u32,
+        minor: u32,
+        platform: Platform,
+        header_revision: u32,
+        board: Board,
+        devices: Vec<DeviceCode>,
+    ) -> Result<Self> {
+        u8::try_from(devices.len()).map_err(|_| Error::InvalidField {
+            field: "devices",
+            message: "recovery V2 supports at most 255 devices".to_owned(),
+        })?;
+        Ok(Self {
+            target_revision,
+            magic_1,
+            magic_2,
+            minor,
+            platform,
+            header_revision,
+            board,
+            devices,
+        })
+    }
+
+    /// Target firmware revision.
+    #[must_use]
+    pub const fn target_revision(&self) -> FirmwareRevision {
+        self.target_revision
+    }
+
+    /// Target devices in encoded order.
+    #[must_use]
+    pub fn devices(&self) -> &[DeviceCode] {
+        &self.devices
+    }
+}
+
+/// Standalone gzip userdata creation specification.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UserdataSpec;
 
 /// Parsed component update header.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComponentHeader {
     /// Minimum firmware revision.
-    pub minimum_revision: u64,
+    pub(crate) minimum_revision: u64,
     /// Target firmware revision.
-    pub target_revision: u64,
+    pub(crate) target_revision: u64,
     /// Cleartext component SHA-256.
-    pub sha256: String,
+    pub(crate) sha256: Sha256Digest,
     /// Component identifier.
-    pub component: u32,
+    pub(crate) component: u32,
     /// Hardware platform.
-    pub platform: Platform,
+    pub(crate) platform: Platform,
     /// Header revision.
-    pub header_revision: u32,
+    pub(crate) header_revision: u32,
     /// Target devices.
-    pub devices: Vec<DeviceCode>,
+    pub(crate) devices: Vec<DeviceCode>,
+}
+
+impl ComponentHeader {
+    /// Inclusive firmware range encoded by the header.
+    #[must_use]
+    pub fn firmware_range(&self) -> FirmwareRange {
+        FirmwareRange::new(self.minimum_revision.into(), self.target_revision.into())
+            .expect("a parsed component range is ordered")
+    }
+
+    /// Clear component-content digest.
+    #[must_use]
+    pub const fn content_digest(&self) -> Sha256Digest {
+        self.sha256
+    }
+
+    /// Component identifier.
+    #[must_use]
+    pub const fn component(&self) -> u32 {
+        self.component
+    }
+
+    /// Hardware platform.
+    #[must_use]
+    pub const fn platform(&self) -> Platform {
+        self.platform
+    }
+
+    /// Target devices in encoded order.
+    #[must_use]
+    pub fn devices(&self) -> &[DeviceCode] {
+        &self.devices
+    }
 }
 
 /// Typed package header.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum PackageHeader {
     /// OTA V1.
     OtaV1(OtaV1Header),
@@ -635,21 +1051,21 @@ impl PackageHeader {
 
     /// Payload hash stored by the header, if the format defines one.
     #[must_use]
-    pub fn payload_hash(&self) -> Option<&str> {
+    pub const fn payload_digest(&self) -> Option<Md5Digest> {
         match self {
-            Self::OtaV1(header) => Some(&header.md5),
-            Self::OtaV2(header) => Some(&header.md5),
-            Self::RecoveryV1(header) => Some(&header.md5),
-            Self::RecoveryV2(header) => Some(&header.md5),
+            Self::OtaV1(header) => Some(header.md5),
+            Self::OtaV2(header) => Some(header.md5),
+            Self::RecoveryV1(header) => Some(header.md5),
+            Self::RecoveryV2(header) => Some(header.md5),
             Self::Component(_) | Self::Userdata { .. } | Self::Android => None,
         }
     }
 
     /// Content hash stored by component bundles, which is not a hash of the tar payload.
     #[must_use]
-    pub fn component_sha256(&self) -> Option<&str> {
+    pub const fn component_sha256(&self) -> Option<Sha256Digest> {
         match self {
-            Self::Component(header) => Some(&header.sha256),
+            Self::Component(header) => Some(header.sha256),
             _ => None,
         }
     }
@@ -659,35 +1075,178 @@ impl PackageHeader {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignatureEnvelope {
     /// Selected Kindle certificate.
-    pub certificate: Certificate,
+    pub(crate) certificate: Certificate,
     /// The 56 reserved SP01 header bytes, retained without interpretation.
-    pub reserved: Vec<u8>,
+    pub(crate) reserved: Vec<u8>,
     /// Raw RSA signature bytes.
-    pub signature: Vec<u8>,
+    pub(crate) signature: Vec<u8>,
+}
+
+impl SignatureEnvelope {
+    /// Certificate selector declared by SP01.
+    #[must_use]
+    pub const fn certificate(&self) -> Certificate {
+        self.certificate
+    }
+
+    /// Uninterpreted reserved bytes.
+    #[must_use]
+    pub fn reserved(&self) -> &[u8] {
+        &self.reserved
+    }
+
+    /// Raw big-endian RSA signature.
+    #[must_use]
+    pub fn signature(&self) -> &[u8] {
+        &self.signature
+    }
+}
+
+/// Digest declared by a parsed package header.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum PayloadDigest {
+    /// MD5 of the decoded payload.
+    Md5(Md5Digest),
+    /// SHA-256 of component content inside a CB01 archive.
+    ComponentSha256(Sha256Digest),
 }
 
 /// Package metadata plus an optional outer signature envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PackageInfo {
+pub struct PackageDescriptor {
     /// Decoded inner header.
-    pub header: PackageHeader,
+    pub(crate) header: PackageHeader,
     /// SP01 envelope, when present.
-    pub envelope: Option<SignatureEnvelope>,
+    pub(crate) envelope: Option<SignatureEnvelope>,
     /// Exact inner magic and encoded header bytes, including unknown/reserved fields.
-    pub raw_inner_header: Vec<u8>,
+    pub(crate) raw_inner_header: Vec<u8>,
+}
+
+impl PackageDescriptor {
+    /// Exact inner package magic.
+    #[must_use]
+    pub const fn magic(&self) -> BundleMagic {
+        self.header.magic()
+    }
+
+    /// High-level package format.
+    #[must_use]
+    pub fn format(&self) -> PackageFormat {
+        self.magic().profile().format()
+    }
+
+    /// Parsed SP01 envelope, if present.
+    #[must_use]
+    pub const fn envelope(&self) -> Option<&SignatureEnvelope> {
+        self.envelope.as_ref()
+    }
+
+    /// Header-declared payload or component digest.
+    #[must_use]
+    pub const fn payload_digest(&self) -> Option<PayloadDigest> {
+        match self.header.payload_digest() {
+            Some(digest) => Some(PayloadDigest::Md5(digest)),
+            None => match self.header.component_sha256() {
+                Some(digest) => Some(PayloadDigest::ComponentSha256(digest)),
+                None => None,
+            },
+        }
+    }
+
+    /// Devices explicitly targeted by the package.
+    #[must_use]
+    pub fn target_devices(&self) -> &[DeviceCode] {
+        match &self.header {
+            PackageHeader::OtaV1(header) => std::slice::from_ref(&header.device),
+            PackageHeader::OtaV2(header) => &header.devices,
+            PackageHeader::RecoveryV2(header) => &header.devices,
+            PackageHeader::Component(header) => &header.devices,
+            _ => &[],
+        }
+    }
+
+    /// Firmware range declared by the package.
+    #[must_use]
+    pub fn firmware_range(&self) -> Option<FirmwareRange> {
+        match &self.header {
+            PackageHeader::OtaV1(header) => Some(header.firmware_range()),
+            PackageHeader::OtaV2(header) => Some(header.firmware_range()),
+            PackageHeader::RecoveryV1(header) => header.target_revision().map(FirmwareRange::exact),
+            PackageHeader::RecoveryV2(header) => {
+                Some(FirmwareRange::exact(header.target_revision()))
+            }
+            PackageHeader::Component(header) => Some(header.firmware_range()),
+            _ => None,
+        }
+    }
+
+    /// Hardware platform selector, if present.
+    #[must_use]
+    pub const fn platform(&self) -> Option<Platform> {
+        match &self.header {
+            PackageHeader::RecoveryV1(header) => header.platform,
+            PackageHeader::RecoveryV2(header) => Some(header.platform),
+            PackageHeader::Component(header) => Some(header.platform),
+            _ => None,
+        }
+    }
+
+    /// Hardware board selector, if present.
+    #[must_use]
+    pub const fn board(&self) -> Option<Board> {
+        match &self.header {
+            PackageHeader::RecoveryV1(header) => header.board,
+            PackageHeader::RecoveryV2(header) => Some(header.board),
+            _ => None,
+        }
+    }
+
+    /// Archive conventions associated with the decoded payload.
+    #[must_use]
+    pub fn archive_kind(&self) -> Option<ArchiveKind> {
+        self.magic().profile().archive_kind()
+    }
+
+    /// Concrete parsed header for format-specific callers.
+    #[must_use]
+    pub const fn header(&self) -> &PackageHeader {
+        &self.header
+    }
+
+    /// Exact inner magic and header bytes as stored on disk.
+    #[must_use]
+    pub fn raw_header(&self) -> &[u8] {
+        &self.raw_inner_header
+    }
 }
 
 /// Strongly typed package creation specification.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PackageSpec {
     /// Create OTA V1.
-    OtaV1(OtaV1Header),
+    OtaV1(OtaV1Spec),
     /// Create OTA V2.
-    OtaV2(OtaV2Header),
+    OtaV2(OtaV2Spec),
     /// Create recovery V1 or FB02 revision 2.
     RecoveryV1(RecoveryV1Spec),
     /// Create recovery V2.
-    RecoveryV2(RecoveryV2Header),
-    /// Wrap a gzip archive directly in SP01.
-    SignedUserdata,
+    RecoveryV2(RecoveryV2Spec),
+    /// Encode a standalone gzip userdata archive.
+    Userdata(UserdataSpec),
+}
+
+impl PackageSpec {
+    pub(crate) const fn magic(&self) -> BundleMagic {
+        match self {
+            Self::OtaV1(spec) => spec.kind.magic(),
+            Self::OtaV2(spec) => spec.kind.magic(),
+            Self::RecoveryV1(spec) => match spec.layout() {
+                RecoveryV1Layout::Legacy { kind, .. } => kind.magic(),
+                RecoveryV1Layout::Revision2 { .. } => BundleMagic::Fb02,
+            },
+            Self::RecoveryV2(_) => BundleMagic::Fb03,
+            Self::Userdata(_) => BundleMagic::Gzip([0x1F, 0x8B, 0x08, 0]),
+        }
+    }
 }

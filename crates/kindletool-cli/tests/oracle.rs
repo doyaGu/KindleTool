@@ -53,11 +53,11 @@ fn build_fixed_archive(directory: &Path) -> Vec<u8> {
     fs::write(source.join("asset.txt"), b"differential fixture").unwrap();
     let mut archive = Vec::new();
     UpdateArchiveBuilder::new(&SigningKey::default_jailbreak().unwrap())
-        .options(ArchiveOptions {
-            legacy_paths: true,
-            ..ArchiveOptions::default()
-        })
-        .build(&[source], &mut archive)
+        .options(ArchiveOptions::new(true, 64).unwrap())
+        .build(
+            &[kindletool::ArchiveInput::from_source(source).unwrap()],
+            &mut archive,
+        )
         .unwrap();
     archive
 }

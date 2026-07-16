@@ -41,7 +41,9 @@ impl SigningKey {
     pub fn from_pem(pem: &str) -> Result<Self> {
         let key = RsaPrivateKey::from_pkcs1_pem(pem)
             .or_else(|_| RsaPrivateKey::from_pkcs8_pem(pem))
-            .map_err(|error| Error::Rsa(error.to_string()))?;
+            .map_err(|error| Error::InvalidKey {
+                message: error.to_string(),
+            })?;
         Self::validated(key)
     }
 
@@ -59,7 +61,9 @@ impl SigningKey {
             parse_hex_biguint(RSA_D)?,
             vec![parse_hex_biguint(RSA_P)?, parse_hex_biguint(RSA_Q)?],
         )
-        .map_err(|error| Error::Rsa(error.to_string()))?;
+        .map_err(|error| Error::InvalidKey {
+            message: error.to_string(),
+        })?;
         Self::validated(key)
     }
 
@@ -80,12 +84,14 @@ impl SigningKey {
     /// Ensure that this key matches the selected Kindle certificate slot.
     pub fn validate_certificate(&self, certificate: Certificate) -> Result<()> {
         if self.size() != certificate.signature_len() {
-            return Err(Error::Rsa(format!(
-                "{}-byte key does not match certificate {} ({} bytes)",
-                self.size(),
-                certificate.raw(),
-                certificate.signature_len()
-            )));
+            return Err(Error::InvalidKey {
+                message: format!(
+                    "{}-byte key does not match certificate {} ({} bytes)",
+                    self.size(),
+                    certificate.raw(),
+                    certificate.signature_len()
+                ),
+            });
         }
         Ok(())
     }
@@ -100,26 +106,32 @@ impl SigningKey {
         let signature: pkcs1v15::Signature = signing_key.sign_digest(digest);
         let bytes = signature.to_vec();
         if bytes.len() != self.size() {
-            return Err(Error::Rsa(format!(
-                "signature has {} bytes, expected {}",
-                bytes.len(),
-                self.size()
-            )));
+            return Err(Error::InvalidKey {
+                message: format!(
+                    "signature has {} bytes, expected {}",
+                    bytes.len(),
+                    self.size()
+                ),
+            });
         }
         Ok(bytes)
     }
 
     fn validated(mut key: RsaPrivateKey) -> Result<Self> {
         if !matches!(key.size(), 128 | 256) {
-            return Err(Error::Rsa(format!(
-                "RSA key is {} bytes; KindleTool supports only 128 or 256",
-                key.size()
-            )));
+            return Err(Error::InvalidKey {
+                message: format!(
+                    "RSA key is {} bytes; KindleTool supports only 128 or 256",
+                    key.size()
+                ),
+            });
         }
-        key.validate()
-            .map_err(|error| Error::Rsa(error.to_string()))?;
-        key.precompute()
-            .map_err(|error| Error::Rsa(error.to_string()))?;
+        key.validate().map_err(|error| Error::InvalidKey {
+            message: error.to_string(),
+        })?;
+        key.precompute().map_err(|error| Error::InvalidKey {
+            message: error.to_string(),
+        })?;
         Ok(Self { inner: key })
     }
 }
@@ -138,12 +150,16 @@ impl VerificationKey {
     pub fn from_pem(pem: &str) -> Result<Self> {
         let key = RsaPublicKey::from_pkcs1_pem(pem)
             .or_else(|_| RsaPublicKey::from_public_key_pem(pem))
-            .map_err(|error| Error::Rsa(error.to_string()))?;
+            .map_err(|error| Error::InvalidKey {
+                message: error.to_string(),
+            })?;
         if !matches!(key.size(), 128 | 256) {
-            return Err(Error::Rsa(format!(
-                "RSA key is {} bytes; KindleTool supports only 128 or 256",
-                key.size()
-            )));
+            return Err(Error::InvalidKey {
+                message: format!(
+                    "RSA key is {} bytes; KindleTool supports only 128 or 256",
+                    key.size()
+                ),
+            });
         }
         Ok(Self { inner: key })
     }
@@ -207,14 +223,20 @@ fn copy_into_digest<R: Read, D: Digest>(reader: &mut R, digest: &mut D) -> Resul
 
 fn parse_hex_biguint(value: &str) -> Result<BigUint> {
     if value.len() % 2 != 0 {
-        return Err(Error::Rsa("odd-length embedded key component".to_owned()));
+        return Err(Error::InvalidKey {
+            message: "odd-length embedded key component".to_owned(),
+        });
     }
     let bytes = value
         .as_bytes()
         .chunks_exact(2)
         .map(|pair| {
-            let text = std::str::from_utf8(pair).map_err(|error| Error::Rsa(error.to_string()))?;
-            u8::from_str_radix(text, 16).map_err(|error| Error::Rsa(error.to_string()))
+            let text = std::str::from_utf8(pair).map_err(|error| Error::InvalidKey {
+                message: error.to_string(),
+            })?;
+            u8::from_str_radix(text, 16).map_err(|error| Error::InvalidKey {
+                message: error.to_string(),
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(BigUint::from_bytes_be(&bytes))

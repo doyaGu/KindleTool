@@ -1,12 +1,16 @@
-use crate::crypto::{SigningKey, md5_hex};
-use crate::{Error, Result};
+use crate::crypto::{SigningKey, VerificationKey, md5_hex, sha256_hex};
+use crate::{
+    ArchiveKind, ArchivePath, Error, Result, Sha256Digest, VerificationLimits, VerificationPolicy,
+};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::{self, File, Metadata};
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
+use std::str::FromStr;
 use std::time::UNIX_EPOCH;
 use tar::{Builder, EntryType, Header};
 use walkdir::WalkDir;
@@ -22,9 +26,37 @@ pub const RECOVERY_BLOCK_SIZE: u64 = 131_072;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArchiveOptions {
     /// Store directory contents relative to each explicitly passed directory.
-    pub legacy_paths: bool,
+    pub(crate) legacy_paths: bool,
     /// Block size written to `update-filelist.dat`.
-    pub block_size: u64,
+    pub(crate) block_size: u64,
+}
+
+impl ArchiveOptions {
+    /// Construct archive options with an explicit block size.
+    pub fn new(legacy_paths: bool, block_size: u64) -> Result<Self> {
+        if block_size == 0 {
+            return Err(Error::InvalidField {
+                field: "block size",
+                message: "must be greater than zero".to_owned(),
+            });
+        }
+        Ok(Self {
+            legacy_paths,
+            block_size,
+        })
+    }
+
+    /// Whether directory contents use legacy root-relative paths.
+    #[must_use]
+    pub const fn legacy_paths(&self) -> bool {
+        self.legacy_paths
+    }
+
+    /// File-list block size.
+    #[must_use]
+    pub const fn block_size(&self) -> u64 {
+        self.block_size
+    }
 }
 
 impl Default for ArchiveOptions {
@@ -40,18 +72,509 @@ impl Default for ArchiveOptions {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ArchiveBuildReport {
     /// Number of source entries added, excluding generated signatures and the index.
-    pub source_entries: usize,
+    source_entries: usize,
     /// Number of regular source files signed.
-    pub signed_files: usize,
+    signed_files: usize,
     /// Whether at least one `.sh` or `.ffs` script was found.
-    pub has_script: bool,
+    has_script: bool,
+}
+
+impl ArchiveBuildReport {
+    /// Number of source entries added.
+    #[must_use]
+    pub const fn source_entries(&self) -> usize {
+        self.source_entries
+    }
+    /// Number of regular files signed.
+    #[must_use]
+    pub const fn signed_files(&self) -> usize {
+        self.signed_files
+    }
+    /// Whether the archive contains an executable script.
+    #[must_use]
+    pub const fn has_script(&self) -> bool {
+        self.has_script
+    }
 }
 
 /// Summary returned after extracting an update archive.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ArchiveExtractReport {
     /// Number of archive entries extracted.
-    pub entries: usize,
+    entries: usize,
+}
+
+impl ArchiveExtractReport {
+    /// Number of entries committed.
+    #[must_use]
+    pub const fn entries(&self) -> usize {
+        self.entries
+    }
+}
+
+/// Explicit source-to-archive path mapping.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArchiveInput {
+    source: PathBuf,
+    destination: ArchivePath,
+}
+
+impl ArchiveInput {
+    /// Construct an explicit source-to-destination mapping.
+    #[must_use]
+    pub const fn new(source: PathBuf, destination: ArchivePath) -> Self {
+        Self {
+            source,
+            destination,
+        }
+    }
+
+    /// Map a source to its final path component.
+    pub fn from_source(source: PathBuf) -> Result<Self> {
+        let destination = safe_input_path(&source)?;
+        Ok(Self {
+            source,
+            destination: ArchivePath::new(archive_path_text(&destination))?,
+        })
+    }
+
+    /// Filesystem source.
+    #[must_use]
+    pub fn source(&self) -> &Path {
+        &self.source
+    }
+
+    /// Normalized archive destination.
+    #[must_use]
+    pub const fn destination(&self) -> &ArchivePath {
+        &self.destination
+    }
+}
+
+/// A concrete archive mismatch found during verification.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ArchiveIssue {
+    /// A path is unsafe, duplicated, non-UTF-8, or exceeds configured limits.
+    UnsafePath(String),
+    /// The archive contains an unsupported entry type.
+    UnsupportedEntry(String),
+    /// A required manifest or signature entry is absent or duplicated.
+    MissingEntry(String),
+    /// A regular entry is not represented consistently by the manifest.
+    ManifestMismatch(String),
+    /// A file digest differs from the manifest.
+    DigestMismatch(String),
+    /// A required archive signature is absent, invalid, or cannot be checked.
+    SignatureMismatch(String),
+    /// A configured resource limit was exceeded.
+    LimitExceeded(&'static str),
+}
+
+/// Result of checking one update archive.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct ArchiveVerificationReport {
+    entries: usize,
+    issues: Vec<ArchiveIssue>,
+    component_content: ComponentContentCheck,
+}
+
+impl ArchiveVerificationReport {
+    /// Number of archive entries inspected.
+    #[must_use]
+    pub const fn entries(&self) -> usize {
+        self.entries
+    }
+
+    /// All concrete mismatches found.
+    #[must_use]
+    pub fn issues(&self) -> &[ArchiveIssue] {
+        &self.issues
+    }
+
+    /// Whether every check required by the selected policy passed.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.issues.is_empty()
+    }
+
+    /// CB01 content candidate result.
+    #[must_use]
+    pub const fn component_content(&self) -> ComponentContentCheck {
+        self.component_content
+    }
+}
+
+/// Result of identifying the single content file covered by a CB01 header digest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ComponentContentCheck {
+    /// Archive kind is not component.
+    NotApplicable,
+    /// Exactly one ordinary regular file was found.
+    Unique(Sha256Digest),
+    /// Zero or multiple content candidates were found.
+    Ambiguous {
+        /// Number of ordinary regular-file candidates found.
+        candidates: usize,
+    },
+}
+
+/// Streaming safety, manifest, digest, and signature verifier for update archives.
+pub struct UpdateArchiveVerifier<'key> {
+    kind: ArchiveKind,
+    policy: VerificationPolicy,
+    key: Option<&'key VerificationKey>,
+    limits: VerificationLimits,
+}
+
+/// Result of verification-gated extraction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SafeExtractionOutcome {
+    /// Verification passed and the staging directory was committed.
+    Extracted(ArchiveExtractReport),
+    /// Verification completed but rejected the archive; nothing was extracted.
+    Rejected(ArchiveVerificationReport),
+}
+
+/// Verification-gated, staging-based archive extractor.
+pub struct SafeExtractor<'key> {
+    verifier: UpdateArchiveVerifier<'key>,
+}
+
+impl<'key> SafeExtractor<'key> {
+    /// Construct an extractor with explicit archive verification settings.
+    #[must_use]
+    pub const fn new(
+        kind: ArchiveKind,
+        policy: VerificationPolicy,
+        key: Option<&'key VerificationKey>,
+        limits: VerificationLimits,
+    ) -> Self {
+        Self {
+            verifier: UpdateArchiveVerifier::new(kind, policy, key, limits),
+        }
+    }
+
+    /// Verify into a seekable spool, then atomically extract only an accepted archive.
+    pub fn extract<R: Read>(
+        &self,
+        mut reader: R,
+        destination: &Path,
+    ) -> Result<SafeExtractionOutcome> {
+        let mut spool = tempfile::tempfile()?;
+        std::io::copy(&mut reader, &mut spool)?;
+        spool.seek(std::io::SeekFrom::Start(0))?;
+        let report = self.verifier.verify(&mut spool)?;
+        if !report.is_valid() {
+            return Ok(SafeExtractionOutcome::Rejected(report));
+        }
+        spool.seek(std::io::SeekFrom::Start(0))?;
+        Ok(SafeExtractionOutcome::Extracted(extract_archive(
+            spool,
+            destination,
+        )?))
+    }
+}
+
+impl<'key> UpdateArchiveVerifier<'key> {
+    /// Construct a verifier with explicit policy and optional archive key.
+    #[must_use]
+    pub const fn new(
+        kind: ArchiveKind,
+        policy: VerificationPolicy,
+        key: Option<&'key VerificationKey>,
+        limits: VerificationLimits,
+    ) -> Self {
+        Self {
+            kind,
+            policy,
+            key,
+            limits,
+        }
+    }
+
+    /// Verify a gzip-compressed GNU tar stream without extracting it.
+    pub fn verify<R: Read>(&self, reader: R) -> Result<ArchiveVerificationReport> {
+        verify_update_archive(reader, self.kind, self.policy, self.key, self.limits)
+    }
+}
+
+#[derive(Debug)]
+struct ManifestRecord {
+    file_type: u32,
+    md5: String,
+    path: String,
+    blocks: u64,
+}
+
+fn verify_update_archive<R: Read>(
+    reader: R,
+    kind: ArchiveKind,
+    policy: VerificationPolicy,
+    key: Option<&VerificationKey>,
+    limits: VerificationLimits,
+) -> Result<ArchiveVerificationReport> {
+    let decoder = GzDecoder::new(reader);
+    let mut archive = tar::Archive::new(decoder);
+    let mut seen = HashSet::new();
+    let mut files = HashMap::<String, Vec<u8>>::new();
+    let mut issues = Vec::new();
+    let mut entries = 0_usize;
+    let mut total = 0_u64;
+
+    for item in archive.entries()? {
+        entries = entries.saturating_add(1);
+        if entries > limits.max_archive_entries {
+            issues.push(ArchiveIssue::LimitExceeded("archive entries"));
+            break;
+        }
+        let mut entry = item?;
+        let entry_type = entry.header().entry_type();
+        let path = match entry.path()?.to_str() {
+            Some(value) if entry_type.is_dir() => {
+                value.replace('\\', "/").trim_end_matches('/').to_owned()
+            }
+            Some(value) => value.replace('\\', "/"),
+            None => {
+                issues.push(ArchiveIssue::UnsafePath("non-UTF-8 path".to_owned()));
+                continue;
+            }
+        };
+        if path.len() > limits.max_path_bytes || crate::ArchivePath::new(path.clone()).is_err() {
+            issues.push(ArchiveIssue::UnsafePath(path));
+            continue;
+        }
+        if !seen.insert(path.clone()) {
+            issues.push(ArchiveIssue::UnsafePath(format!("duplicate path {path}")));
+            continue;
+        }
+        if entry_type.is_dir() {
+            continue;
+        }
+        if matches!(entry_type, EntryType::Symlink | EntryType::Link) {
+            if validate_link_target(&entry, Path::new(&path)).is_err() {
+                issues.push(ArchiveIssue::UnsafePath(path));
+            }
+            continue;
+        }
+        if !entry_type.is_file() {
+            issues.push(ArchiveIssue::UnsupportedEntry(path));
+            continue;
+        }
+        let declared = entry.size();
+        total = total.saturating_add(declared);
+        if total > limits.max_uncompressed_bytes {
+            issues.push(ArchiveIssue::LimitExceeded("uncompressed bytes"));
+            break;
+        }
+        if path == INDEX_FILE_NAME && declared > limits.max_manifest_bytes as u64 {
+            issues.push(ArchiveIssue::LimitExceeded("manifest bytes"));
+            continue;
+        }
+        let mut data = Vec::with_capacity(usize::try_from(declared).unwrap_or(0));
+        entry.read_to_end(&mut data)?;
+        files.insert(path, data);
+    }
+
+    if kind == ArchiveKind::Userdata {
+        return Ok(ArchiveVerificationReport {
+            entries,
+            issues,
+            component_content: ComponentContentCheck::NotApplicable,
+        });
+    }
+
+    let component_content = if kind == ArchiveKind::Component {
+        let candidates = files
+            .iter()
+            .filter(|(path, _)| path.as_str() != INDEX_FILE_NAME && !is_signature_path(path))
+            .collect::<Vec<_>>();
+        if let [(_, data)] = candidates.as_slice() {
+            let mut cursor = Cursor::new(data.as_slice());
+            ComponentContentCheck::Unique(Sha256Digest::from_str(&sha256_hex(&mut cursor)?)?)
+        } else {
+            ComponentContentCheck::Ambiguous {
+                candidates: candidates.len(),
+            }
+        }
+    } else {
+        ComponentContentCheck::NotApplicable
+    };
+
+    let Some(index) = files.get(INDEX_FILE_NAME) else {
+        issues.push(ArchiveIssue::MissingEntry(INDEX_FILE_NAME.to_owned()));
+        return Ok(ArchiveVerificationReport {
+            entries,
+            issues,
+            component_content,
+        });
+    };
+    let records = parse_manifest(index, &mut issues);
+    let block_size = match kind {
+        ArchiveKind::Recovery => RECOVERY_BLOCK_SIZE,
+        ArchiveKind::Ota | ArchiveKind::Component => OTA_BLOCK_SIZE,
+        ArchiveKind::Userdata => unreachable!(),
+    };
+    let mut listed = HashSet::new();
+    for record in records {
+        if !listed.insert(record.path.clone()) {
+            issues.push(ArchiveIssue::ManifestMismatch(format!(
+                "duplicate manifest path {}",
+                record.path
+            )));
+            continue;
+        }
+        let Some(data) = files.get(&record.path) else {
+            issues.push(ArchiveIssue::MissingEntry(record.path));
+            continue;
+        };
+        let mut cursor = Cursor::new(data);
+        if md5_hex(&mut cursor)? != record.md5.to_ascii_lowercase() {
+            issues.push(ArchiveIssue::DigestMismatch(record.path.clone()));
+        }
+        if data.len() as u64 / block_size != record.blocks {
+            issues.push(ArchiveIssue::ManifestMismatch(format!(
+                "block count for {}",
+                record.path
+            )));
+        }
+        let expected_type = if kind == ArchiveKind::Recovery && is_kernel(Path::new(&record.path)) {
+            1
+        } else if is_script(Path::new(&record.path)) {
+            129
+        } else {
+            128
+        };
+        if record.file_type != expected_type {
+            issues.push(ArchiveIssue::ManifestMismatch(format!(
+                "file type for {}",
+                record.path
+            )));
+        }
+        verify_archive_signature(
+            key,
+            policy,
+            data,
+            files.get(&format!("{}.sig", record.path)),
+            &record.path,
+            &mut issues,
+        )?;
+    }
+
+    for path in files.keys() {
+        if path == INDEX_FILE_NAME || path == "update-filelist.dat.sig" || is_signature_path(path) {
+            continue;
+        }
+        if !listed.contains(path) {
+            issues.push(ArchiveIssue::ManifestMismatch(format!(
+                "unlisted file {path}"
+            )));
+        }
+    }
+    for path in files
+        .keys()
+        .filter(|path| is_signature_path(path) && path.as_str() != "update-filelist.dat.sig")
+    {
+        let source = &path[..path.len() - 4];
+        if !listed.contains(source) {
+            issues.push(ArchiveIssue::ManifestMismatch(format!(
+                "orphan signature {path}"
+            )));
+        }
+    }
+    verify_archive_signature(
+        key,
+        policy,
+        index,
+        files.get("update-filelist.dat.sig"),
+        INDEX_FILE_NAME,
+        &mut issues,
+    )?;
+    Ok(ArchiveVerificationReport {
+        entries,
+        issues,
+        component_content,
+    })
+}
+
+fn parse_manifest(index: &[u8], issues: &mut Vec<ArchiveIssue>) -> Vec<ManifestRecord> {
+    let Ok(text) = std::str::from_utf8(index) else {
+        issues.push(ArchiveIssue::ManifestMismatch(
+            "manifest is not UTF-8".to_owned(),
+        ));
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            if fields.len() < 5 {
+                issues.push(ArchiveIssue::ManifestMismatch(format!(
+                    "malformed line: {line}"
+                )));
+                return None;
+            }
+            let Ok(file_type) = fields[0].parse() else {
+                issues.push(ArchiveIssue::ManifestMismatch(format!("file type: {line}")));
+                return None;
+            };
+            if fields[1].len() != 32 || !fields[1].bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                issues.push(ArchiveIssue::ManifestMismatch(format!("MD5: {line}")));
+                return None;
+            }
+            let Ok(blocks) = fields[fields.len() - 2].parse() else {
+                issues.push(ArchiveIssue::ManifestMismatch(format!(
+                    "block count: {line}"
+                )));
+                return None;
+            };
+            let path = fields[2..fields.len() - 2].join(" ");
+            if crate::ArchivePath::new(path.clone()).is_err() {
+                issues.push(ArchiveIssue::UnsafePath(path));
+                return None;
+            }
+            Some(ManifestRecord {
+                file_type,
+                md5: fields[1].to_owned(),
+                path,
+                blocks,
+            })
+        })
+        .collect()
+}
+
+fn verify_archive_signature(
+    key: Option<&VerificationKey>,
+    policy: VerificationPolicy,
+    data: &[u8],
+    signature: Option<&Vec<u8>>,
+    path: &str,
+    issues: &mut Vec<ArchiveIssue>,
+) -> Result<()> {
+    let Some(signature) = signature else {
+        issues.push(ArchiveIssue::MissingEntry(format!("{path}.sig")));
+        return Ok(());
+    };
+    let Some(key) = key else {
+        if policy == VerificationPolicy::authentic() {
+            issues.push(ArchiveIssue::SignatureMismatch(format!(
+                "missing key for {path}"
+            )));
+        }
+        return Ok(());
+    };
+    if !key.verify_reader(Cursor::new(data), signature)? {
+        issues.push(ArchiveIssue::SignatureMismatch(path.to_owned()));
+    }
+    Ok(())
+}
+
+fn is_signature_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("sig"))
 }
 
 /// Builds Kindle-compatible GNU tar/gzip archives and their per-file signatures.
@@ -81,7 +604,11 @@ impl<'key> UpdateArchiveBuilder<'key> {
     }
 
     /// Build a complete intermediate archive from input files and directories.
-    pub fn build<W: Write>(&self, inputs: &[PathBuf], writer: W) -> Result<ArchiveBuildReport> {
+    pub fn build<W: Write>(
+        &self,
+        inputs: &[ArchiveInput],
+        writer: W,
+    ) -> Result<ArchiveBuildReport> {
         if inputs.is_empty() {
             return Err(Error::InvalidField {
                 field: "archive inputs",
@@ -248,11 +775,12 @@ struct SourceEntry {
     metadata: Metadata,
 }
 
-fn collect_entries(inputs: &[PathBuf], legacy: bool) -> Result<Vec<SourceEntry>> {
+fn collect_entries(inputs: &[ArchiveInput], legacy: bool) -> Result<Vec<SourceEntry>> {
     let mut output = Vec::new();
-    for input in inputs {
+    for mapping in inputs {
+        let input = &mapping.source;
         let root_metadata = fs::symlink_metadata(input)?;
-        let archive_root = safe_input_path(input)?;
+        let archive_root = PathBuf::from(mapping.destination.as_str());
         if root_metadata.is_dir() {
             for item in WalkDir::new(input).follow_links(false).sort_by_file_name() {
                 let item = item.map_err(|error| {
@@ -270,7 +798,11 @@ fn collect_entries(inputs: &[PathBuf], legacy: bool) -> Result<Vec<SourceEntry>>
                 }
                 let relative = source
                     .strip_prefix(input)
-                    .map_err(|_| Error::UnsupportedEntry(source.clone()))?;
+                    .map_err(|_| Error::ArchiveMismatch {
+                        path: Some(source.clone()),
+                        expected: "path below archive input".to_owned(),
+                        actual: "path outside archive input".to_owned(),
+                    })?;
                 let archive_path = if legacy {
                     relative.to_path_buf()
                 } else {
@@ -315,7 +847,11 @@ fn append_source_entry<W: Write>(tar: &mut Builder<W>, entry: &SourceEntry) -> R
         header.set_link_name(&target)?;
         append_with_path(tar, &mut header, &entry.archive_path, std::io::empty())?;
     } else {
-        return Err(Error::UnsupportedEntry(entry.source.clone()));
+        return Err(Error::ArchiveMismatch {
+            path: Some(entry.source.clone()),
+            expected: "regular file, directory, or symlink".to_owned(),
+            actual: "unsupported filesystem entry".to_owned(),
+        });
     }
     Ok(())
 }
@@ -503,7 +1039,9 @@ fn ensure_no_symlink_ancestors(root: &Path, relative: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArchiveOptions, UpdateArchiveBuilder, extract_archive, normalize_link_target};
+    use super::{
+        ArchiveInput, ArchiveOptions, UpdateArchiveBuilder, extract_archive, normalize_link_target,
+    };
     use crate::crypto::SigningKey;
     use flate2::Compression;
     use flate2::write::GzEncoder;
@@ -524,7 +1062,10 @@ mod tests {
                 legacy_paths: true,
                 ..ArchiveOptions::default()
             })
-            .build(&[source.path().to_path_buf()], &mut archive)
+            .build(
+                &[ArchiveInput::from_source(source.path().to_path_buf()).unwrap()],
+                &mut archive,
+            )
             .unwrap();
         assert!(report.has_script);
         assert_eq!(report.signed_files, 2);
@@ -543,7 +1084,10 @@ mod tests {
         let key = SigningKey::default_jailbreak().unwrap();
         let mut archive = Vec::new();
         UpdateArchiveBuilder::new(&key)
-            .build(&[source.path().to_path_buf()], &mut archive)
+            .build(
+                &[ArchiveInput::from_source(source.path().to_path_buf()).unwrap()],
+                &mut archive,
+            )
             .unwrap();
 
         let decoder = flate2::read::GzDecoder::new(Cursor::new(archive));

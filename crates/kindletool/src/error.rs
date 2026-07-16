@@ -28,26 +28,31 @@ pub enum Error {
         /// Human-readable explanation.
         message: String,
     },
-    /// A requested operation is unsupported for this bundle.
-    #[error("unsupported operation: {0}")]
-    Unsupported(&'static str),
+    /// A requested operation is unsupported for the encountered format.
+    #[error("unsupported format operation {operation}")]
+    UnsupportedFormat {
+        /// Stable operation identifier.
+        operation: &'static str,
+    },
     /// Archive content attempted to escape its extraction root.
     #[error("unsafe archive path: {0}")]
     UnsafeArchivePath(PathBuf),
-    /// A source path could not be represented in a Kindle update archive.
-    #[error("unsupported filesystem entry: {0}")]
-    UnsupportedEntry(PathBuf),
-    /// The payload digest does not match the header.
-    #[error("integrity check failed: header {expected}, payload {actual}")]
-    Integrity {
-        /// Digest stored in the package header.
+    /// Archive content disagrees with its manifest or expected structure.
+    #[error("archive mismatch at {path:?}: expected {expected}, found {actual}")]
+    ArchiveMismatch {
+        /// Associated path, when the mismatch belongs to one entry.
+        path: Option<PathBuf>,
+        /// Stable expected condition.
         expected: String,
-        /// Digest calculated from the decoded payload.
+        /// Observed condition.
         actual: String,
     },
     /// RSA key parsing, validation, signing, or verification setup failed.
-    #[error("RSA error: {0}")]
-    Rsa(String),
+    #[error("invalid RSA key: {message}")]
+    InvalidKey {
+        /// Parser or validation detail.
+        message: String,
+    },
 }
 
 /// Library result alias.
