@@ -5,7 +5,8 @@ use std::path::PathBuf;
 #[command(
     name = "kindletool",
     version,
-    about = "Inspect, verify, extract, and create Kindle update packages"
+    about = "Inspect, verify, extract, and create Kindle update packages",
+    disable_help_subcommand = true
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
@@ -325,5 +326,6 @@ mod tests {
         );
         assert!(Cli::try_parse_from(["kindletool", "convert", "update.bin"]).is_err());
         assert!(Cli::try_parse_from(["kindletool", "md"]).is_err());
+        assert!(Cli::try_parse_from(["kindletool", "help"]).is_err());
     }
 }
