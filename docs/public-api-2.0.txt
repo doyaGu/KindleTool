@@ -1,0 +1,32 @@
+# KindleTool 2.0 public interface snapshot
+# Additive changes are allowed in 2.x; removals or signature changes require a new major version.
+
+Package<R>
+  parse(R) -> Result<Package<R>>
+  parse_with_limits(R, ParseLimits) -> Result<Package<R>>
+  descriptor(&self) -> &PackageDescriptor
+  verify(&mut self, &VerificationContext, VerificationPolicy) -> Result<ValidationOutcome> where R: Read + Seek
+  copy_payload(self, PayloadView, W) -> Result<u64>
+  copy_inner(self, W) -> Result<u64>
+  into_reader(self) -> R
+
+PackageEncoder::encode(&PackageSpec, R, W, EncodeOptions) -> Result<EncodeReport>
+PackageSpec::{OtaV1, OtaV2, RecoveryV1, RecoveryV2, Userdata}
+OtaV1Spec, OtaV2Spec, RecoveryV1Spec, RecoveryV2Spec, UserdataSpec
+EncodeOptions::{signed, unsigned}; PayloadSource::{Decoded, Stored}; PayloadView::{Decoded, Stored}
+
+PackageDescriptor
+  format, magic, envelope, payload_digest, target_devices, firmware_range
+  platform, board, archive_kind, header, raw_header
+PackageHeader::{OtaV1, OtaV2, RecoveryV1, RecoveryV2, Component, Userdata, Android}
+SignatureEnvelope; Md5Digest; Sha256Digest; FirmwareRevision; FirmwareRange
+DeviceCode; DeviceCatalog; Platform; Board; Certificate; ArchivePath
+
+VerificationPolicy::{structural, authentic}
+VerificationContext; VerificationLimits; ValidationOutcome; VerificationReport
+SignatureCheck; PayloadIntegrityCheck; ArchiveCheck; TargetCheck; TargetFieldCheck
+
+ArchiveInput; ArchiveOptions; UpdateArchiveBuilder; UpdateArchiveVerifier
+SafeExtractor; SafeExtractionOutcome; ArchiveVerificationReport; ArchiveIssue
+
+SigningKey; VerificationKey; Error; Result

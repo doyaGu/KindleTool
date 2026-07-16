@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/doyaGu/KindleTool/blob/master/docs/kindletool-json-v1.schema.json",
+  "title": "KindleTool CLI JSON output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "status", "package", "verification", "diagnostics"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "command": { "enum": ["inspect", "verify"] },
+    "status": { "enum": ["parsed", "accepted", "rejected"] },
+    "package": { "type": "object" },
+    "verification": { "type": ["object", "null"] },
+    "diagnostics": { "type": "array", "items": { "type": "object" } }
+  }
+}

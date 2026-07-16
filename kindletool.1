@@ -1,60 +1,62 @@
-.TH KINDLETOOL 1 "July 2026" "KindleTool 1.7.0" "User Commands"
+.TH KINDLETOOL 1 "July 2026" "KindleTool 2.0.0" "User Commands"
 .SH NAME
-kindletool \- create, inspect, convert, and safely extract Kindle update packages
+kindletool \- inspect, verify, extract, and create Kindle update packages
 .SH SYNOPSIS
 .B kindletool
 .I command
 .RI [ options ]
 .SH DESCRIPTION
-The Rust KindleTool is compatible with the 1.6.6 package formats and command surface.
-It recognizes FB01, FB02, FB03, FC02, FC04, FD03, FD04, FL01, SP01, CB01, gzip,
-and ZIP headers. Package fields are decoded explicitly as little endian values and
-untrusted archive paths are confined to the requested extraction directory.
+KindleTool 2.0 is a Rust implementation of the Kindle v1.6.6 disk formats with a deliberately
+new command line. It recognizes FB01, FB02, FB03, FC02, FC04, FD03, FD04, FL01, SP01, CB01,
+gzip, and ZIP. It never implicitly deletes input packages.
 .SH COMMANDS
 .TP
-.B md [input] [output]
-Apply the Kindle byte substitution. A missing path or a single dash selects standard input or output.
+.B inspect package [--format human|json]
+Parse metadata without implying that content or signatures are valid.
 .TP
-.B dm [input] [output]
-Reverse the Kindle byte substitution.
+.B verify package [--policy structural|authentic] [--format human|json]
+Check SP01, payload digest, archive paths, manifest, file hashes and signatures, plus optional
+device, firmware, platform and board targets. The default policy is authentic.
 .TP
-.B convert [options] input...
-Inspect or convert one or more packages. File-mode conversion deletes each source only after a
-validated, flushed, atomic output succeeds. Use
-.B -k
-to keep sources or
-.B -c
-to write payloads to standard output and always keep sources.
+.B extract package directory [--policy structural|authentic]
+Verify before atomically committing a staged extraction. The default policy is structural.
 .TP
-.B extract [-u] input output
-Validate the complete decoded update archive in private staging and atomically commit it to an
-absent or empty output directory.
+.B export payload --view decoded|stored package --output file
+Export an explicit payload representation. A single dash writes staged output to stdout.
 .TP
-.B create type [options] input... output
-Create an ota, ota2, recovery, recovery2, or signed userdata package. A single .tar.gz, .tgz,
-or .tar input is treated as a prebuilt archive.
+.B export signature package --output file
+Export the SP01 signature.
 .TP
-.B info serial
-Print the model and derived root/recovery passwords for a 16-character serial number.
+.B export inner package --output file
+Remove exactly one SP01 envelope.
 .TP
-.B version
-Print version information.
+.B create ota-v1|ota-v2|recovery-v1|recovery-v2|userdata [options] input...
+Create and self-verify one package. Output is mandatory with
+.BR --output .
+Use
+.B --archive
+for a prebuilt archive; positional arguments are otherwise archive inputs.
 .TP
-.B help [command]
-Print general or command-specific help.
+.B codec mangle|demangle input --output file
+Apply or reverse the Kindle byte substitution.
+.TP
+.B serial serial-number
+Print model information and derived root/recovery passwords.
+.SH EXIT STATUS
+0 indicates success or Accepted, 1 Rejected, 2 command-line usage failure, and 3 execution error.
 .SH ENVIRONMENT
 .TP
 .B KT_WITH_UNKNOWN_DEVCODES
-Expose data-mined device identifiers in aliases and numeric diagnostic output.
-.TP
-.B KT_PKG_METADATA_DUMP
-Write shell-friendly parsed package metadata to this path.
+Allow data-mined device codes while expanding create aliases.
 .TP
 .B TMPDIR
-Select the directory used for temporary package and archive files.
+Select temporary spooling storage.
 .SH SAFETY
-Extraction rejects absolute paths, parent traversal, escaping symbolic or hard links, and paths
-whose existing ancestors are symbolic links. It refuses nonempty destinations and leaves no partial
-output when validation fails. Package creation never remounts or modifies a Kindle root filesystem.
+Archive verification rejects absolute paths, parent traversal, duplicate paths, escaping links,
+unsupported entries, manifest mismatches, invalid hashes and required invalid signatures. Output
+files and extraction directories are staged, flushed, verified, and committed only on success.
+.SH COMPATIBILITY
+The legacy md, dm, convert, info, version, and help subcommands are not accepted. See
+docs/migration-2.0.md. The C v1.6.6 implementation remains the differential-test oracle.
 .SH LICENSE
-GPL-3.0-or-later. The C 1.6.6 implementation remains the compatibility oracle.
+GPL-3.0-or-later.
