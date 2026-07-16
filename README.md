@@ -105,3 +105,7 @@ before parsing and structural verification:
 KINDLETOOL_CORPUS="/path/KUAL.bin:/path/USBNetLite.bin:/path/official-FB03.bin" \
   cargo test -p kindletool --test corpus -- --nocapture
 ```
+
+Known-invalid vendor artifacts can be kept as negative corpus cases without weakening verification.
+Set `KINDLETOOL_CORPUS_DIGEST_MISMATCH` to a host path-list of packages expected to be rejected
+solely for archive entry digest mismatches.
