@@ -292,7 +292,7 @@ pub(crate) struct RecoveryV2Args {
     pub(crate) minor: u32,
     #[arg(long, default_value = "unspecified")]
     pub(crate) platform: String,
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = 0)]
     pub(crate) header_revision: u32,
     #[arg(long, default_value = "unspecified")]
     pub(crate) board: String,
