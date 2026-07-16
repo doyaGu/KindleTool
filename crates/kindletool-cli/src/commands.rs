@@ -4,11 +4,12 @@ use crate::args::{
     PolicyArg, RecoveryV1KindArg, SerialArgs, VerifyArgs,
 };
 use kindletool::{
-    ArchiveInput, ArchiveOptions, Board, Certificate, DeviceCatalog, DeviceCode, EncodeOptions,
-    Error, FirmwareRange, FirmwareRevision, OtaV1Kind, OtaV1Spec, OtaV2Kind, OtaV2Spec, Package,
-    PackageEncoder, PackageSpec, PayloadSource, PayloadView, Platform, RecoveryV1Kind,
-    RecoveryV1Spec, RecoveryV2Spec, Result, SigningKey, UpdateArchiveBuilder, UserdataSpec,
-    ValidationOutcome, VerificationContext, VerificationKey, VerificationPolicy,
+    ArchiveCheck, ArchiveInput, ArchiveKind, ArchiveOptions, Board, Certificate, DeviceCatalog,
+    DeviceCode, EncodeOptions, Error, FirmwareRange, FirmwareRevision, OtaV1Kind, OtaV1Spec,
+    OtaV2Kind, OtaV2Spec, Package, PackageEncoder, PackageFormat, PackageSpec, PayloadDigest,
+    PayloadIntegrityCheck, PayloadSource, PayloadView, Platform, RecoveryV1Kind, RecoveryV1Spec,
+    RecoveryV2Spec, Result, SignatureCheck, SigningKey, TargetFieldCheck, UpdateArchiveBuilder,
+    UserdataSpec, ValidationOutcome, VerificationContext, VerificationKey, VerificationPolicy,
 };
 use serde_json::{Value, json};
 use std::fs::File;
@@ -460,15 +461,15 @@ const fn policy(value: PolicyArg) -> VerificationPolicy {
 
 fn package_json(descriptor: &kindletool::PackageDescriptor) -> Value {
     json!({
-        "format": format!("{:?}", descriptor.format()),
+        "format": package_format_name(descriptor.format()),
         "magic": descriptor.magic().to_string(),
         "envelope": descriptor.envelope().map(|value| json!({"certificate": value.certificate().raw(), "signature_bytes": value.signature().len()})),
-        "payload_digest": descriptor.payload_digest().map(|value| format!("{value:?}")),
+        "payload_digest": descriptor.payload_digest().map(payload_digest_json),
         "target_devices": descriptor.target_devices().iter().map(|value| value.0).collect::<Vec<_>>(),
         "firmware_range": descriptor.firmware_range().map(|value| json!({"minimum": value.minimum().get(), "maximum": value.maximum().get()})),
         "platform": descriptor.platform().map(Platform::raw),
         "board": descriptor.board().map(Board::raw),
-        "archive_kind": descriptor.archive_kind().map(|value| format!("{value:?}")),
+        "archive_kind": descriptor.archive_kind().map(archive_kind_name),
         "raw_header_bytes": descriptor.raw_header().len(),
     })
 }
@@ -476,16 +477,148 @@ fn package_json(descriptor: &kindletool::PackageDescriptor) -> Value {
 fn verification_json(outcome: &ValidationOutcome) -> Value {
     let report = outcome.report();
     json!({
-        "signature": format!("{:?}", report.signature()),
-        "payload": format!("{:?}", report.payload()),
-        "archive": format!("{:?}", report.archive()),
+        "signature": signature_check_json(report.signature()),
+        "payload": payload_check_json(report.payload()),
+        "archive": { "status": archive_check_name(report.archive()) },
         "target": {
-            "device": format!("{:?}", report.target().device()),
-            "firmware": format!("{:?}", report.target().firmware()),
-            "platform": format!("{:?}", report.target().platform()),
-            "board": format!("{:?}", report.target().board()),
+            "device": target_field_name(report.target().device()),
+            "firmware": target_field_name(report.target().firmware()),
+            "platform": target_field_name(report.target().platform()),
+            "board": target_field_name(report.target().board()),
         }
     })
+}
+
+const fn package_format_name(format: PackageFormat) -> &'static str {
+    match format {
+        PackageFormat::RecoveryV1 => "recovery-v1",
+        PackageFormat::RecoveryV2 => "recovery-v2",
+        PackageFormat::OtaV1 => "ota-v1",
+        PackageFormat::OtaV2 => "ota-v2",
+        PackageFormat::SignatureEnvelope => "signature-envelope",
+        PackageFormat::Component => "component",
+        PackageFormat::Userdata => "userdata",
+        PackageFormat::Android => "android",
+        _ => "unknown",
+    }
+}
+
+const fn archive_kind_name(kind: ArchiveKind) -> &'static str {
+    match kind {
+        ArchiveKind::Ota => "ota",
+        ArchiveKind::Recovery => "recovery",
+        ArchiveKind::Component => "component",
+        ArchiveKind::Userdata => "userdata",
+        _ => "unknown",
+    }
+}
+
+fn payload_digest_json(digest: PayloadDigest) -> Value {
+    match digest {
+        PayloadDigest::Md5(value) => json!({
+            "algorithm": "md5",
+            "scope": "decoded-payload",
+            "value": value.to_string(),
+        }),
+        PayloadDigest::ComponentSha256(value) => json!({
+            "algorithm": "sha256",
+            "scope": "component-content",
+            "value": value.to_string(),
+        }),
+        _ => json!({ "algorithm": "unknown", "scope": "unknown", "value": null }),
+    }
+}
+
+fn signature_check_json(check: SignatureCheck) -> Value {
+    match check {
+        SignatureCheck::Unsigned => json!({ "status": "unsigned", "certificate": null }),
+        SignatureCheck::MissingKey { certificate } => {
+            json!({ "status": "missing-key", "certificate": certificate.raw() })
+        }
+        SignatureCheck::KeyMismatch { certificate } => {
+            json!({ "status": "key-mismatch", "certificate": certificate.raw() })
+        }
+        SignatureCheck::Valid { certificate } => {
+            json!({ "status": "valid", "certificate": certificate.raw() })
+        }
+        SignatureCheck::Invalid { certificate } => {
+            json!({ "status": "invalid", "certificate": certificate.raw() })
+        }
+        _ => json!({ "status": "unknown", "certificate": null }),
+    }
+}
+
+fn payload_check_json(check: PayloadIntegrityCheck) -> Value {
+    match check {
+        PayloadIntegrityCheck::Valid { digest } => json!({
+            "status": "valid",
+            "algorithm": "md5",
+            "expected": digest.to_string(),
+            "actual": digest.to_string(),
+            "candidates": null,
+        }),
+        PayloadIntegrityCheck::Invalid { expected, actual } => json!({
+            "status": "invalid",
+            "algorithm": "md5",
+            "expected": expected.to_string(),
+            "actual": actual.to_string(),
+            "candidates": null,
+        }),
+        PayloadIntegrityCheck::NotPresent => payload_status_json("not-present"),
+        PayloadIntegrityCheck::UnsupportedScope => payload_status_json("unsupported-scope"),
+        PayloadIntegrityCheck::ComponentValid { digest } => json!({
+            "status": "valid",
+            "algorithm": "sha256",
+            "expected": digest.to_string(),
+            "actual": digest.to_string(),
+            "candidates": 1,
+        }),
+        PayloadIntegrityCheck::ComponentInvalid { expected, actual } => json!({
+            "status": "invalid",
+            "algorithm": "sha256",
+            "expected": expected.to_string(),
+            "actual": actual.to_string(),
+            "candidates": 1,
+        }),
+        PayloadIntegrityCheck::ComponentAmbiguous { candidates } => json!({
+            "status": "component-ambiguous",
+            "algorithm": "sha256",
+            "expected": null,
+            "actual": null,
+            "candidates": candidates,
+        }),
+        _ => payload_status_json("unknown"),
+    }
+}
+
+fn payload_status_json(status: &'static str) -> Value {
+    json!({
+        "status": status,
+        "algorithm": null,
+        "expected": null,
+        "actual": null,
+        "candidates": null,
+    })
+}
+
+const fn archive_check_name(check: ArchiveCheck) -> &'static str {
+    match check {
+        ArchiveCheck::NotChecked => "not-checked",
+        ArchiveCheck::NotArchive => "not-archive",
+        ArchiveCheck::Valid => "valid",
+        ArchiveCheck::Invalid => "invalid",
+        _ => "unknown",
+    }
+}
+
+const fn target_field_name(check: TargetFieldCheck) -> &'static str {
+    match check {
+        TargetFieldCheck::NotChecked => "not-checked",
+        TargetFieldCheck::Match => "match",
+        TargetFieldCheck::Mismatch => "mismatch",
+        TargetFieldCheck::NotSpecified => "not-specified",
+        _ => "unknown",
+    }
 }
 
 fn json_document(command: &str, status: &str, package: &Value, verification: &Value) -> Value {

@@ -97,7 +97,10 @@ fn create_verify_inspect_export_and_extract_form_one_verified_flow() {
     let document: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
     assert_eq!(document["schema_version"], 1);
     assert_eq!(document["command"], "inspect");
+    assert_eq!(document["package"]["format"], "ota-v2");
     assert_eq!(document["package"]["magic"], "FD04");
+    assert_eq!(document["package"]["payload_digest"]["algorithm"], "md5");
+    assert_eq!(document["package"]["archive_kind"], "ota");
 
     let verify = run(temporary.path(), &["verify", "Update_fixture.bin"]);
     assert!(
@@ -107,6 +110,18 @@ fn create_verify_inspect_export_and_extract_form_one_verified_flow() {
         String::from_utf8_lossy(&verify.stderr)
     );
     assert!(String::from_utf8_lossy(&verify.stdout).contains("Status: Accepted"));
+
+    let verify_json = run(
+        temporary.path(),
+        &["verify", "Update_fixture.bin", "--format", "json"],
+    );
+    assert!(verify_json.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&verify_json.stdout).unwrap();
+    assert_eq!(document["status"], "accepted");
+    assert_eq!(document["verification"]["signature"]["status"], "valid");
+    assert_eq!(document["verification"]["payload"]["status"], "valid");
+    assert_eq!(document["verification"]["archive"]["status"], "valid");
+    assert_eq!(document["verification"]["target"]["device"], "not-checked");
 
     assert!(
         run(
@@ -159,6 +174,18 @@ fn create_verify_inspect_export_and_extract_form_one_verified_flow() {
         b"asset"
     );
     assert!(temporary.path().join("Update_fixture.bin").exists());
+}
+
+#[test]
+fn json_schema_declares_the_nested_machine_interface() {
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../../../docs/kindletool-json-v1.schema.json")).unwrap();
+    assert_eq!(schema["$defs"]["package"]["additionalProperties"], false);
+    assert_eq!(
+        schema["$defs"]["verification"]["additionalProperties"],
+        false
+    );
+    assert!(schema["$defs"]["payload_check"]["properties"]["status"]["enum"].is_array());
 }
 
 #[test]

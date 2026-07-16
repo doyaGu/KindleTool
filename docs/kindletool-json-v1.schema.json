@@ -9,8 +9,190 @@
     "schema_version": { "const": 1 },
     "command": { "enum": ["inspect", "verify"] },
     "status": { "enum": ["parsed", "accepted", "rejected"] },
-    "package": { "type": "object" },
-    "verification": { "type": ["object", "null"] },
-    "diagnostics": { "type": "array", "items": { "type": "object" } }
+    "package": { "$ref": "#/$defs/package" },
+    "verification": {
+      "oneOf": [
+        { "$ref": "#/$defs/verification" },
+        { "type": "null" }
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    }
+  },
+  "$defs": {
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "magic",
+        "envelope",
+        "payload_digest",
+        "target_devices",
+        "firmware_range",
+        "platform",
+        "board",
+        "archive_kind",
+        "raw_header_bytes"
+      ],
+      "properties": {
+        "format": {
+          "enum": [
+            "recovery-v1",
+            "recovery-v2",
+            "ota-v1",
+            "ota-v2",
+            "signature-envelope",
+            "component",
+            "userdata",
+            "android",
+            "unknown"
+          ]
+        },
+        "magic": { "type": "string", "minLength": 3, "maxLength": 4 },
+        "envelope": {
+          "oneOf": [
+            { "$ref": "#/$defs/envelope" },
+            { "type": "null" }
+          ]
+        },
+        "payload_digest": {
+          "oneOf": [
+            { "$ref": "#/$defs/digest" },
+            { "type": "null" }
+          ]
+        },
+        "target_devices": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 65535 }
+        },
+        "firmware_range": {
+          "oneOf": [
+            { "$ref": "#/$defs/firmware_range" },
+            { "type": "null" }
+          ]
+        },
+        "platform": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295 },
+        "board": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295 },
+        "archive_kind": {
+          "type": ["string", "null"],
+          "enum": ["ota", "recovery", "component", "userdata", "unknown", null]
+        },
+        "raw_header_bytes": { "type": "integer", "minimum": 4 }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["certificate", "signature_bytes"],
+      "properties": {
+        "certificate": { "type": "integer", "minimum": 0 },
+        "signature_bytes": { "type": "integer", "enum": [128, 256] }
+      }
+    },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "scope", "value"],
+      "properties": {
+        "algorithm": { "enum": ["md5", "sha256", "unknown"] },
+        "scope": { "enum": ["decoded-payload", "component-content", "unknown"] },
+        "value": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{32}([0-9a-f]{32})?$"
+        }
+      }
+    },
+    "firmware_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum", "maximum"],
+      "properties": {
+        "minimum": { "type": "integer", "minimum": 0 },
+        "maximum": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signature", "payload", "archive", "target"],
+      "properties": {
+        "signature": { "$ref": "#/$defs/signature_check" },
+        "payload": { "$ref": "#/$defs/payload_check" },
+        "archive": { "$ref": "#/$defs/archive_check" },
+        "target": { "$ref": "#/$defs/target_check" }
+      }
+    },
+    "signature_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "certificate"],
+      "properties": {
+        "status": {
+          "enum": ["unsigned", "missing-key", "key-mismatch", "valid", "invalid", "unknown"]
+        },
+        "certificate": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "payload_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "algorithm", "expected", "actual", "candidates"],
+      "properties": {
+        "status": {
+          "enum": [
+            "valid",
+            "invalid",
+            "not-present",
+            "unsupported-scope",
+            "component-ambiguous",
+            "unknown"
+          ]
+        },
+        "algorithm": { "type": ["string", "null"], "enum": ["md5", "sha256", null] },
+        "expected": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{32}([0-9a-f]{32})?$"
+        },
+        "actual": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{32}([0-9a-f]{32})?$"
+        },
+        "candidates": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "archive_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["not-checked", "not-archive", "valid", "invalid", "unknown"] }
+      }
+    },
+    "target_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device", "firmware", "platform", "board"],
+      "properties": {
+        "device": { "$ref": "#/$defs/target_field" },
+        "firmware": { "$ref": "#/$defs/target_field" },
+        "platform": { "$ref": "#/$defs/target_field" },
+        "board": { "$ref": "#/$defs/target_field" }
+      }
+    },
+    "target_field": {
+      "enum": ["not-checked", "match", "mismatch", "not-specified", "unknown"]
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    }
   }
 }
