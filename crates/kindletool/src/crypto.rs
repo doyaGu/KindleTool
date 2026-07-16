@@ -204,9 +204,14 @@ pub(crate) fn md5_hex_reader<R: Read>(mut reader: R) -> Result<String> {
 /// Calculate lowercase hexadecimal SHA-256 for a stream and rewind it.
 pub fn sha256_hex<R: Read + Seek>(reader: &mut R) -> Result<String> {
     reader.seek(SeekFrom::Start(0))?;
-    let mut digest = Sha256::new();
-    copy_into_digest(reader, &mut digest)?;
+    let result = sha256_hex_reader(&mut *reader)?;
     reader.seek(SeekFrom::Start(0))?;
+    Ok(result)
+}
+
+pub(crate) fn sha256_hex_reader<R: Read>(mut reader: R) -> Result<String> {
+    let mut digest = Sha256::new();
+    copy_into_digest(&mut reader, &mut digest)?;
     Ok(format!("{:x}", digest.finalize()))
 }
 

@@ -1,4 +1,4 @@
-use crate::crypto::{SigningKey, VerificationKey, md5_hex, sha256_hex};
+use crate::crypto::{SigningKey, VerificationKey, md5_hex, md5_hex_reader, sha256_hex_reader};
 use crate::{
     ArchiveKind, ArchivePath, Error, Result, Sha256Digest, VerificationLimits, VerificationPolicy,
 };
@@ -8,7 +8,7 @@ use flate2::write::GzEncoder;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::{self, File, Metadata};
-use std::io::{Cursor, Read, Seek, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::time::UNIX_EPOCH;
@@ -34,10 +34,12 @@ pub struct ArchiveOptions {
 impl ArchiveOptions {
     /// Construct archive options with an explicit block size.
     pub fn new(legacy_paths: bool, block_size: u64) -> Result<Self> {
-        if block_size == 0 {
+        if !matches!(block_size, OTA_BLOCK_SIZE | RECOVERY_BLOCK_SIZE) {
             return Err(Error::InvalidField {
                 field: "block size",
-                message: "must be greater than zero".to_owned(),
+                message: format!(
+                    "must be {OTA_BLOCK_SIZE} for OTA or {RECOVERY_BLOCK_SIZE} for recovery"
+                ),
             });
         }
         Ok(Self {
@@ -56,6 +58,14 @@ impl ArchiveOptions {
     #[must_use]
     pub const fn block_size(&self) -> u64 {
         self.block_size
+    }
+
+    const fn archive_kind(self) -> ArchiveKind {
+        if self.block_size == RECOVERY_BLOCK_SIZE {
+            ArchiveKind::Recovery
+        } else {
+            ArchiveKind::Ota
+        }
     }
 }
 
@@ -318,6 +328,12 @@ struct ManifestRecord {
     blocks: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct StoredFile {
+    offset: u64,
+    length: u64,
+}
+
 fn verify_update_archive<R: Read>(
     reader: R,
     kind: ArchiveKind,
@@ -328,7 +344,8 @@ fn verify_update_archive<R: Read>(
     let decoder = GzDecoder::new(reader);
     let mut archive = tar::Archive::new(decoder);
     let mut seen = HashSet::new();
-    let mut files = HashMap::<String, Vec<u8>>::new();
+    let mut files = HashMap::<String, StoredFile>::new();
+    let mut spool = tempfile::tempfile()?;
     let mut issues = Vec::new();
     let mut entries = 0_usize;
     let mut total = 0_u64;
@@ -382,9 +399,14 @@ fn verify_update_archive<R: Read>(
             issues.push(ArchiveIssue::LimitExceeded("manifest bytes"));
             continue;
         }
-        let mut data = Vec::with_capacity(usize::try_from(declared).unwrap_or(0));
-        entry.read_to_end(&mut data)?;
-        files.insert(path, data);
+        let offset = spool.stream_position()?;
+        let length = std::io::copy(&mut entry, &mut spool)?;
+        if length != declared {
+            issues.push(ArchiveIssue::ManifestMismatch(format!(
+                "declared size for {path}"
+            )));
+        }
+        files.insert(path, StoredFile { offset, length });
     }
 
     if kind == ArchiveKind::Userdata {
@@ -400,9 +422,8 @@ fn verify_update_archive<R: Read>(
             .iter()
             .filter(|(path, _)| path.as_str() != INDEX_FILE_NAME && !is_signature_path(path))
             .collect::<Vec<_>>();
-        if let [(_, data)] = candidates.as_slice() {
-            let mut cursor = Cursor::new(data.as_slice());
-            ComponentContentCheck::Unique(Sha256Digest::from_str(&sha256_hex(&mut cursor)?)?)
+        if let [(_, file)] = candidates.as_slice() {
+            ComponentContentCheck::Unique(spooled_sha256(&mut spool, file)?)
         } else {
             ComponentContentCheck::Ambiguous {
                 candidates: candidates.len(),
@@ -412,7 +433,7 @@ fn verify_update_archive<R: Read>(
         ComponentContentCheck::NotApplicable
     };
 
-    let Some(index) = files.get(INDEX_FILE_NAME) else {
+    let Some(index_file) = files.get(INDEX_FILE_NAME) else {
         issues.push(ArchiveIssue::MissingEntry(INDEX_FILE_NAME.to_owned()));
         return Ok(ArchiveVerificationReport {
             entries,
@@ -420,12 +441,9 @@ fn verify_update_archive<R: Read>(
             component_content,
         });
     };
-    let records = parse_manifest(index, &mut issues);
-    let block_size = match kind {
-        ArchiveKind::Recovery => RECOVERY_BLOCK_SIZE,
-        ArchiveKind::Ota | ArchiveKind::Component => OTA_BLOCK_SIZE,
-        ArchiveKind::Userdata => unreachable!(),
-    };
+    let index = read_spooled_file(&mut spool, index_file)?;
+    let records = parse_manifest(&index, &mut issues);
+    let block_size = kind.block_size();
     let mut listed = HashSet::new();
     for record in records {
         if !listed.insert(record.path.clone()) {
@@ -439,11 +457,10 @@ fn verify_update_archive<R: Read>(
             issues.push(ArchiveIssue::MissingEntry(record.path));
             continue;
         };
-        let mut cursor = Cursor::new(data);
-        if md5_hex(&mut cursor)? != record.md5.to_ascii_lowercase() {
+        if spooled_md5(&mut spool, data)? != record.md5.to_ascii_lowercase() {
             issues.push(ArchiveIssue::DigestMismatch(record.path.clone()));
         }
-        if data.len() as u64 / block_size != record.blocks {
+        if data.length / block_size != record.blocks {
             issues.push(ArchiveIssue::ManifestMismatch(format!(
                 "block count for {}",
                 record.path
@@ -465,6 +482,7 @@ fn verify_update_archive<R: Read>(
         verify_archive_signature(
             key,
             policy,
+            &mut spool,
             data,
             files.get(&format!("{}.sig", record.path)),
             &record.path,
@@ -496,7 +514,8 @@ fn verify_update_archive<R: Read>(
     verify_archive_signature(
         key,
         policy,
-        index,
+        &mut spool,
+        index_file,
         files.get("update-filelist.dat.sig"),
         INDEX_FILE_NAME,
         &mut issues,
@@ -556,8 +575,9 @@ fn parse_manifest(index: &[u8], issues: &mut Vec<ArchiveIssue>) -> Vec<ManifestR
 fn verify_archive_signature(
     key: Option<&VerificationKey>,
     policy: VerificationPolicy,
-    data: &[u8],
-    signature: Option<&Vec<u8>>,
+    spool: &mut File,
+    data: &StoredFile,
+    signature: Option<&StoredFile>,
     path: &str,
     issues: &mut Vec<ArchiveIssue>,
 ) -> Result<()> {
@@ -573,10 +593,37 @@ fn verify_archive_signature(
         }
         return Ok(());
     };
-    if !key.verify_reader(Cursor::new(data), signature)? {
+    if signature.length != key.size() as u64 {
+        issues.push(ArchiveIssue::SignatureMismatch(path.to_owned()));
+        return Ok(());
+    }
+    let signature = read_spooled_file(spool, signature)?;
+    spool.seek(SeekFrom::Start(data.offset))?;
+    if !key.verify_reader((&mut *spool).take(data.length), &signature)? {
         issues.push(ArchiveIssue::SignatureMismatch(path.to_owned()));
     }
     Ok(())
+}
+
+fn read_spooled_file(spool: &mut File, file: &StoredFile) -> Result<Vec<u8>> {
+    let length = usize::try_from(file.length).map_err(|_| Error::InvalidField {
+        field: "archive entry size",
+        message: format!("{} bytes cannot be retained on this platform", file.length),
+    })?;
+    let mut data = vec![0_u8; length];
+    spool.seek(SeekFrom::Start(file.offset))?;
+    spool.read_exact(&mut data)?;
+    Ok(data)
+}
+
+fn spooled_md5(spool: &mut File, file: &StoredFile) -> Result<String> {
+    spool.seek(SeekFrom::Start(file.offset))?;
+    md5_hex_reader((&mut *spool).take(file.length))
+}
+
+fn spooled_sha256(spool: &mut File, file: &StoredFile) -> Result<Sha256Digest> {
+    spool.seek(SeekFrom::Start(file.offset))?;
+    Sha256Digest::from_str(&sha256_hex_reader((&mut *spool).take(file.length))?)
 }
 
 fn is_signature_path(path: &str) -> bool {
@@ -615,7 +662,7 @@ impl<'key> UpdateArchiveBuilder<'key> {
     pub fn build<W: Write>(
         &self,
         inputs: &[ArchiveInput],
-        writer: W,
+        mut writer: W,
     ) -> Result<ArchiveBuildReport> {
         if inputs.is_empty() {
             return Err(Error::InvalidField {
@@ -623,71 +670,86 @@ impl<'key> UpdateArchiveBuilder<'key> {
                 message: "at least one file or directory is required".to_owned(),
             });
         }
-        if self.options.block_size == 0 {
-            return Err(Error::InvalidField {
-                field: "block size",
-                message: "must be greater than zero".to_owned(),
+        let entries = collect_entries(inputs, self.options.legacy_paths)?;
+        let mut spool = tempfile::tempfile()?;
+        let mut report = ArchiveBuildReport::default();
+        {
+            let encoder = GzEncoder::new(&mut spool, Compression::default());
+            let mut tar = Builder::new(encoder);
+            tar.mode(tar::HeaderMode::Complete);
+            tar.preserve_absolute(true);
+
+            let mut regular_files = Vec::new();
+            for entry in &entries {
+                append_source_entry(&mut tar, entry)?;
+                report.source_entries += 1;
+                if entry.metadata.file_type().is_file() {
+                    report.has_script |= is_script(&entry.archive_path);
+                    regular_files.push(entry);
+                }
+            }
+
+            let mut index = Vec::new();
+            for entry in regular_files {
+                let mut source = File::open(&entry.source)?;
+                let md5 = md5_hex(&mut source)?;
+                let signature = self.key.sign(&mut source)?;
+                let signature_path = append_extension(&entry.archive_path, ".sig");
+                append_generated(&mut tar, &signature_path, &signature)?;
+                report.signed_files += 1;
+
+                let file_type = if self.options.block_size == RECOVERY_BLOCK_SIZE
+                    && is_kernel(&entry.archive_path)
+                {
+                    1
+                } else if is_script(&entry.archive_path) {
+                    129
+                } else {
+                    128
+                };
+                let display_name = entry
+                    .source
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .unwrap_or("file");
+                writeln!(
+                    index,
+                    "{file_type} {md5} {} {} {display_name}_ktool_file",
+                    archive_path_text(&entry.archive_path),
+                    entry.metadata.len() / self.options.block_size,
+                )?;
+            }
+
+            let index_signature = self.key.sign(&mut Cursor::new(&index))?;
+            append_generated(
+                &mut tar,
+                Path::new("update-filelist.dat.sig"),
+                &index_signature,
+            )?;
+            append_generated(&mut tar, Path::new(INDEX_FILE_NAME), &index)?;
+            tar.finish()?;
+            let encoder = tar.into_inner()?;
+            encoder.finish()?;
+        }
+
+        spool.seek(SeekFrom::Start(0))?;
+        let verification_key = self.key.verification_key();
+        let verification = UpdateArchiveVerifier::new(
+            self.options.archive_kind(),
+            VerificationPolicy::authentic(),
+            Some(&verification_key),
+            VerificationLimits::default(),
+        )
+        .verify(&mut spool)?;
+        if !verification.is_valid() {
+            return Err(Error::ArchiveMismatch {
+                path: None,
+                expected: "self-verified update archive".to_owned(),
+                actual: format!("{:?}", verification.issues()),
             });
         }
-
-        let entries = collect_entries(inputs, self.options.legacy_paths)?;
-        let encoder = GzEncoder::new(writer, Compression::default());
-        let mut tar = Builder::new(encoder);
-        tar.mode(tar::HeaderMode::Complete);
-        tar.preserve_absolute(true);
-
-        let mut report = ArchiveBuildReport::default();
-        let mut regular_files = Vec::new();
-        for entry in &entries {
-            append_source_entry(&mut tar, entry)?;
-            report.source_entries += 1;
-            if entry.metadata.file_type().is_file() {
-                report.has_script |= is_script(&entry.archive_path);
-                regular_files.push(entry);
-            }
-        }
-
-        let mut index = Vec::new();
-        for entry in regular_files {
-            let mut source = File::open(&entry.source)?;
-            let md5 = md5_hex(&mut source)?;
-            let signature = self.key.sign(&mut source)?;
-            let signature_path = append_extension(&entry.archive_path, ".sig");
-            append_generated(&mut tar, &signature_path, &signature)?;
-            report.signed_files += 1;
-
-            let file_type = if self.options.block_size == RECOVERY_BLOCK_SIZE
-                && is_kernel(&entry.archive_path)
-            {
-                1
-            } else if is_script(&entry.archive_path) {
-                129
-            } else {
-                128
-            };
-            let display_name = entry
-                .source
-                .file_name()
-                .and_then(OsStr::to_str)
-                .unwrap_or("file");
-            writeln!(
-                index,
-                "{file_type} {md5} {} {} {display_name}_ktool_file",
-                archive_path_text(&entry.archive_path),
-                entry.metadata.len() / self.options.block_size,
-            )?;
-        }
-
-        let index_signature = self.key.sign(&mut Cursor::new(&index))?;
-        append_generated(
-            &mut tar,
-            Path::new("update-filelist.dat.sig"),
-            &index_signature,
-        )?;
-        append_generated(&mut tar, Path::new(INDEX_FILE_NAME), &index)?;
-        tar.finish()?;
-        let encoder = tar.into_inner()?;
-        encoder.finish()?;
+        spool.seek(SeekFrom::Start(0))?;
+        std::io::copy(&mut spool, &mut writer)?;
         Ok(report)
     }
 }
@@ -1041,6 +1103,7 @@ mod tests {
     use super::{
         ArchiveInput, ArchiveOptions, UpdateArchiveBuilder, extract_archive, normalize_link_target,
     };
+    use crate::ArchivePath;
     use crate::crypto::SigningKey;
     use flate2::Compression;
     use flate2::write::GzEncoder;
@@ -1098,6 +1161,36 @@ mod tests {
             .collect::<Vec<_>>();
         let root = source.path().file_name().unwrap();
         assert!(paths.contains(&PathBuf::from(root).join("asset.txt")));
+    }
+
+    #[test]
+    fn archive_options_reject_unknown_block_sizes() {
+        assert!(ArchiveOptions::new(false, 1).is_err());
+        assert!(ArchiveOptions::new(false, super::OTA_BLOCK_SIZE).is_ok());
+        assert!(ArchiveOptions::new(false, super::RECOVERY_BLOCK_SIZE).is_ok());
+    }
+
+    #[test]
+    fn builder_rejects_duplicate_archive_destinations_without_writing_output() {
+        let source = tempfile::tempdir().unwrap();
+        let first = source.path().join("first");
+        let second = source.path().join("second");
+        fs::write(&first, b"first").unwrap();
+        fs::write(&second, b"second").unwrap();
+        let destination = ArchivePath::new("duplicate").unwrap();
+        let inputs = [
+            ArchiveInput::new(first, destination.clone()),
+            ArchiveInput::new(second, destination),
+        ];
+        let key = SigningKey::default_jailbreak().unwrap();
+        let mut output = Vec::new();
+
+        assert!(
+            UpdateArchiveBuilder::new(&key)
+                .build(&inputs, &mut output)
+                .is_err()
+        );
+        assert!(output.is_empty());
     }
 
     #[test]

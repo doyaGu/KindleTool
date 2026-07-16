@@ -38,6 +38,17 @@ pub enum ArchiveKind {
     Userdata,
 }
 
+impl ArchiveKind {
+    /// Manifest block size used by this archive convention.
+    #[must_use]
+    pub const fn block_size(self) -> u64 {
+        match self {
+            Self::Ota | Self::Component | Self::Userdata => 64,
+            Self::Recovery => 131_072,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HeaderLayout {
     OtaV1,
@@ -114,9 +125,8 @@ impl FormatProfile {
     #[must_use]
     pub const fn archive_block_size(self) -> Option<u64> {
         match self.archive_kind {
-            Some(ArchiveKind::Ota | ArchiveKind::Component) => Some(64),
-            Some(ArchiveKind::Recovery) => Some(131_072),
-            Some(ArchiveKind::Userdata) | None => None,
+            Some(kind) => Some(kind.block_size()),
+            None => None,
         }
     }
 }
