@@ -242,6 +242,65 @@ fn stdin_conversion_rejects_a_corrupt_payload_before_writing() {
 }
 
 #[test]
+fn create_rejects_an_invalid_prebuilt_archive_without_output() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(
+        temporary.path().join("invalid.tar.gz"),
+        b"not a gzip archive",
+    )
+    .unwrap();
+
+    let output = run(
+        temporary.path(),
+        &[
+            "create",
+            "ota2",
+            "-d",
+            "0x201",
+            "invalid.tar.gz",
+            "Update_invalid.bin",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(!temporary.path().join("Update_invalid.bin").exists());
+}
+
+#[test]
+fn uncompressed_tar_is_archived_as_an_input_file() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("payload.tar"), b"ordinary input").unwrap();
+    let create = run(
+        temporary.path(),
+        &[
+            "create",
+            "ota2",
+            "-d",
+            "0x201",
+            "payload.tar",
+            "Update_tar_input.bin",
+        ],
+    );
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let extract = run(
+        temporary.path(),
+        &["extract", "Update_tar_input.bin", "tar-input"],
+    );
+    assert!(
+        extract.status.success(),
+        "{}",
+        String::from_utf8_lossy(&extract.stderr)
+    );
+    assert_eq!(
+        fs::read(temporary.path().join("tar-input/payload.tar")).unwrap(),
+        b"ordinary input"
+    );
+}
+
+#[test]
 fn v2_only_commands_are_not_part_of_the_cli_contract() {
     let temporary = tempfile::tempdir().unwrap();
     for command in ["inspect", "verify", "export", "codec", "serial"] {

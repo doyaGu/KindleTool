@@ -359,14 +359,42 @@ fn create(args: &CreateArgs) -> Result<()> {
     } else {
         PayloadSource::Decoded
     };
-    let options = if !args.unsigned && spec.default_envelope() {
+    let signed = !args.unsigned && spec.default_envelope();
+    let options = if signed {
         EncodeOptions::signed(source, &key, certificate)?
     } else {
         EncodeOptions::unsigned(source)
     };
     archive.seek(SeekFrom::Start(0))?;
     staged_output(&output, |writer| {
-        PackageEncoder::encode(&spec, &mut archive, writer, options)?;
+        let report = PackageEncoder::encode(&spec, &mut archive, &mut *writer, options)?;
+        writer.flush()?;
+        writer.seek(SeekFrom::Start(0))?;
+        let mut package = Package::parse(writer.try_clone()?)?;
+        if package.descriptor().format() != report.format() {
+            return Err(Error::ArchiveMismatch {
+                path: None,
+                expected: format!("{:?}", report.format()),
+                actual: format!("{:?}", package.descriptor().format()),
+            });
+        }
+        let public_key = key.verification_key();
+        let context = VerificationContext::new()
+            .with_package_key(certificate, public_key.clone())
+            .with_archive_key(public_key);
+        let policy = if signed {
+            VerificationPolicy::authentic()
+        } else {
+            VerificationPolicy::structural()
+        };
+        let outcome = package.verify(&context, policy)?;
+        if !outcome.is_accepted() {
+            return Err(Error::ArchiveMismatch {
+                path: None,
+                expected: "self-verified package".to_owned(),
+                actual: format!("{:?}", outcome.report()),
+            });
+        }
         Ok(())
     })?;
     if !is_stdio(&output) {
@@ -950,9 +978,7 @@ fn is_tar_archive(path: &Path) -> bool {
         || path
             .extension()
             .and_then(|value| value.to_str())
-            .is_some_and(|value| {
-                value.eq_ignore_ascii_case("tgz") || value.eq_ignore_ascii_case("tar")
-            })
+            .is_some_and(|value| value.eq_ignore_ascii_case("tgz"))
 }
 
 fn is_package_path(path: &Path) -> bool {
