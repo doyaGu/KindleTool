@@ -364,10 +364,40 @@ fn directory_archives_have_matching_manifests_signatures_and_contents() {
         "C extracts Rust directory package",
     );
 
-    assert_eq!(
-        file_manifest(&temporary.path().join("rust-extracted-c")),
-        file_manifest(&temporary.path().join("c-extracted-rust"))
+    assert_equivalent_directory_outputs(
+        &temporary.path().join("rust-extracted-c"),
+        &temporary.path().join("c-extracted-rust"),
     );
+}
+
+#[test]
+fn directory_manifest_comparison_accepts_platform_dependent_index_order() {
+    let temporary = tempfile::tempdir().unwrap();
+    let left = temporary.path().join("left");
+    let right = temporary.path().join("right");
+    fs::create_dir(&left).unwrap();
+    fs::create_dir(&right).unwrap();
+
+    for root in [&left, &right] {
+        fs::write(root.join("asset.txt"), b"payload").unwrap();
+        fs::write(root.join("asset.txt.sig"), b"file signature").unwrap();
+    }
+    let left_index = b"128 a payload/asset.txt\n129 b payload/install.sh\n";
+    let right_index = b"129 b payload/install.sh\n128 a payload/asset.txt\n";
+    let key = SigningKey::default_jailbreak().unwrap();
+    for (root, index) in [
+        (&left, left_index.as_slice()),
+        (&right, right_index.as_slice()),
+    ] {
+        fs::write(root.join("update-filelist.dat"), index).unwrap();
+        fs::write(
+            root.join("update-filelist.dat.sig"),
+            key.sign(&mut Cursor::new(index)).unwrap(),
+        )
+        .unwrap();
+    }
+
+    assert_equivalent_directory_outputs(&left, &right);
 }
 
 #[test]
@@ -482,4 +512,48 @@ fn file_manifest(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut output = BTreeMap::new();
     visit(root, root, &mut output);
     output
+}
+
+fn assert_equivalent_directory_outputs(left_root: &Path, right_root: &Path) {
+    let index_path = Path::new("update-filelist.dat");
+    let signature_path = Path::new("update-filelist.dat.sig");
+    let mut left = file_manifest(left_root);
+    let mut right = file_manifest(right_root);
+    let left_index = left.remove(index_path).expect("left index is present");
+    let right_index = right.remove(index_path).expect("right index is present");
+    let left_signature = left
+        .remove(signature_path)
+        .expect("left index signature is present");
+    let right_signature = right
+        .remove(signature_path)
+        .expect("right index signature is present");
+
+    assert_eq!(left, right, "payloads or per-file signatures differ");
+    assert_eq!(
+        sorted_index_lines(&left_index),
+        sorted_index_lines(&right_index),
+        "update-filelist.dat entries differ"
+    );
+
+    let key = SigningKey::default_jailbreak().unwrap();
+    assert_eq!(
+        key.sign(&mut Cursor::new(&left_index)).unwrap(),
+        left_signature,
+        "left update-filelist.dat signature is invalid"
+    );
+    assert_eq!(
+        key.sign(&mut Cursor::new(&right_index)).unwrap(),
+        right_signature,
+        "right update-filelist.dat signature is invalid"
+    );
+}
+
+fn sorted_index_lines(index: &[u8]) -> Vec<Vec<u8>> {
+    let mut lines = index
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect::<Vec<_>>();
+    lines.sort_unstable();
+    lines
 }

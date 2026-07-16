@@ -4,16 +4,16 @@ include!("tables_generated.rs");
 
 /// Transform bytes with Amazon's update-package obfuscation table.
 pub fn mangle(bytes: &mut [u8]) {
-    bytes
-        .iter_mut()
-        .for_each(|byte| *byte = PTOG[*byte as usize]);
+    for byte in bytes {
+        *byte = PTOG[*byte as usize];
+    }
 }
 
 /// Reverse Amazon's update-package obfuscation.
 pub fn demangle(bytes: &mut [u8]) {
-    bytes
-        .iter_mut()
-        .for_each(|byte| *byte = GTOP[*byte as usize]);
+    for byte in bytes {
+        *byte = GTOP[*byte as usize];
+    }
 }
 
 /// Reader adapter that mangles bytes after reading them from its inner stream.
