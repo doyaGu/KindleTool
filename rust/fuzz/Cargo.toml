@@ -1,0 +1,19 @@
+[package]
+name = "kindletool-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+kindletool = { path = "../crates/kindletool" }
+
+[[bin]]
+name = "package_reader"
+path = "fuzz_targets/package_reader.rs"
+test = false
+doc = false
+bench = false
