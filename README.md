@@ -1,6 +1,17 @@
 # KindleTool
 [![License](https://img.shields.io/github/license/NiLuJe/KindleTool.svg)](/LICENSE) [![Codacy Badge](https://api.codacy.com/project/badge/Grade/15d7ef43d2e046f998668960d4a65ae6)](https://www.codacy.com/app/NiLuJe/KindleTool?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=NiLuJe/KindleTool&amp;utm_campaign=Badge_Grade) [![Latest tag](https://img.shields.io/github/tag-date/NiLuJe/KindleTool.svg)](https://github.com/NiLuJe/KindleTool/releases/)
 
+KindleTool's default desktop release is now the safe Rust implementation in [`rust/`](rust/README.md).
+It preserves the v1.6.6 package and CLI compatibility baseline while providing standalone
+Windows x64, Linux x64 musl, macOS x64, and macOS ARM64 executables. Build it with:
+
+```sh
+cd rust
+cargo build --release --locked
+```
+
+The existing C implementation remains frozen in place as the legacy differential-test oracle.
+
 ## Usage
 -   KindleTool md [ &lt;<b>input</b>&gt; ] [ &lt;<b>output</b>&gt; ]
 
@@ -51,74 +62,14 @@
 
 	Devices:
 		OTA V1 & Recovery packages only support one device. OTA V2 & Recovery V2 packages can support multiple devices.
-
-		-d, --device k1               Kindle 1
-		-d, --device k2               Kindle 2 US
-		-d, --device k2i              Kindle 2 International
-		-d, --device dx               Kindle DX US
-		-d, --device dxi              Kindle DX International
-		-d, --device dxg              Kindle DX Graphite
-		-d, --device k3w              Kindle 3 WiFi
-		-d, --device k3g              Kindle 3 WiFi+3G
-		-d, --device k3gb             Kindle 3 WiFi+3G Europe
-		-d, --device k4               Silver Kindle 4 (Non-Touch) (2011)
-		-d, --device k4b              Black Kindle 4 (Non-Touch) (2012)
-		-d, --device kindle2          Alias for k2 + k2i
-		-d, --device kindledx         Alias for dx + dxi + dxg
-		-d, --device kindle3          Alias for k3w + k3g + k3gb
-		-d, --device legacy           Alias for kindle2 + kindledx + kindle3
-		-d, --device kindle4          Alias for k4 + k4b
-		-d, --device touch            Includes all known Kindle Touch variants
-		-d, --device paperwhite       Includes all known Kindle PaperWhite 1 variants
-		-d, --device paperwhite2      Includes all known Kindle PaperWhite 2 variants
-		-d, --device basic            Includes all known Kindle Basic 1 variants
-		-d, --device voyage           Includes all known Kindle Voyage variants
-		-d, --device paperwhite3      Includes all known Kindle PaperWhite 3 variants
-		-d, --device oasis            Includes all known Kindle Oasis 1 variants
-		-d, --device basic2           Includes all known Kindle Basic 2 variants
-		-d, --device oasis2           Includes all known Kindle Oasis 2 variants
-		-d, --device paperwhite4      Includes all known Kindle PaperWhite 4 variants
-		-d, --device basic3           Includes all known Kindle Basic 3 variants
-		-d, --device oasis3           Includes all known Kindle Oasis 3 variants
-		-d, --device paperwhite5      Includes all known Kindle PaperWhite 5 variants
-		-d, --device basic4           Includes all known Kindle Basic 4 variants
-		-d, --device scribe           Includes all known Kindle Scribe variants
-		-d, --device basic5           Includes all known Kindle Basic 5 variants
-		-d, --device paperwhite6      Includes all known Kindle PaperWhite 6 variants
-		-d, --device scribe2          Includes all known Kindle Scribe 2 variants
-		-d, --device colorsoft        Includes all known Kindle ColorSoft variants
-		-d, --device scribe3          Includes all known Kindle Scribe 3 variants
-		-d, --device scribecolorsoft  Includes all known Kindle Scribe ColorSoft variants
-		-d, --device kindle5          Alias for touch + paperwhite + paperwhite2 + basic + voyage + paperwhite3 + oasis + basic2 + oasis2 + paperwhite4 + basic3 + oasis3 + paperwhite5 + basic4 + scribe + basic5 + paperwhite6 + scribe2 + colorsoft + scribe3 + scribecolorsoft
-		-d, --device none             No specific device (Recovery V2 & Recovery FB02 with header rev 2 only, default).
-		-d, --device auto             The current device (Obviously, has to be run from a Kindle).
+		The complete alias list is generated from DeviceCatalog; run `kindletool help create` to view it.
 
 	Platforms:
 		Recovery V2 & Recovery FB02 with header rev 2 updates only. Use a single platform per package.
-
-		-p, --platform unspecified    Don't target a specific platform.
-		-p, --platform mario          Mario (mostly devices shipped on FW 1.x?) [Deprecated].
-		-p, --platform luigi          Luigi (mostly devices shipped on FW 2.x?).
-		-p, --platform banjo          Banjo (devices shipped on FW 3.x?).
-		-p, --platform yoshi          Yoshi (mostly devices shipped on FW <= 5.1).
-		-p, --platform yoshime-p      Yoshime (Prototype).
-		-p, --platform yoshime        Yoshime (Also known as Yoshime3, mostly devices shipped on FW >= 5.2).
-		-p, --platform wario          Wario (mostly devices shipped on FW >= 5.4).
-		-p, --platform duet           Duet (mostly devices shipped on FW >= 5.7).
-		-p, --platform heisenberg     Heisenberg (mostly devices shipped on FW >= 5.8).
-		-p, --platform zelda          Zelda (mostly devices shipped on FW >= 5.9).
-		-p, --platform rex            Rex (mostly devices shipped on FW >= 5.10).
-		-p, --platform bellatrix      Bellatrix (mostly devices shipped on FW >= 5.14).
-		-p, --platform bellatrix3     Bellatrix3 (mostly devices shipped on FW >= 5.16).
-		-p, --platform bellatrix4     Bellatrix4 (mostly devices shipped on FW >= 5.18).
-		-p, --platform platpa6        Platpa6 (Scribe 3 platform).
-		-p, --platform platcs8        Platcs8 (Scribe ColorSoft platform).
+		The complete platform list is generated from the format catalog; run `kindletool help create` to view it.
 	Boards:
 		Recovery V2 & Recovery FB02 with header rev 2 updates only. Use a single board per package.
-
-		-B, --board unspecified       Don't target a specific board, skip the device check.
-		-B, --board tequila           Tequila (Kindle 4)
-		-B, --board whitney           Whitney (Kindle Touch)
+		The complete board list is generated from the format catalog; run `kindletool help create` to view it.
 
 	Options:
 		All the following options are optional and advanced.

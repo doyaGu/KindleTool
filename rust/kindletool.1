@@ -1,0 +1,60 @@
+.TH KINDLETOOL 1 "July 2026" "KindleTool 1.6.6" "User Commands"
+.SH NAME
+kindletool \- create, inspect, convert, and safely extract Kindle update packages
+.SH SYNOPSIS
+.B kindletool
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+The Rust KindleTool is compatible with the 1.6.6 package formats and command surface.
+It recognizes FB01, FB02, FB03, FC02, FC04, FD03, FD04, FL01, SP01, CB01, gzip,
+and ZIP headers. Package fields are decoded explicitly as little endian values and
+untrusted archive paths are confined to the requested extraction directory.
+.SH COMMANDS
+.TP
+.B md [input] [output]
+Apply the Kindle byte substitution. A missing path or a single dash selects standard input or output.
+.TP
+.B dm [input] [output]
+Reverse the Kindle byte substitution.
+.TP
+.B convert [options] input...
+Inspect or convert one or more packages. File-mode conversion deletes each source only after a
+validated, flushed, atomic output succeeds. Use
+.B -k
+to keep sources or
+.B -c
+to write payloads to standard output and always keep sources.
+.TP
+.B extract [-u] input output
+Validate the complete decoded update archive in private staging and atomically commit it to an
+absent or empty output directory.
+.TP
+.B create type [options] input... output
+Create an ota, ota2, recovery, recovery2, or signed userdata package. A single .tar.gz, .tgz,
+or .tar input is treated as a prebuilt archive.
+.TP
+.B info serial
+Print the model and derived root/recovery passwords for a 16-character serial number.
+.TP
+.B version
+Print version information.
+.TP
+.B help [command]
+Print general or command-specific help.
+.SH ENVIRONMENT
+.TP
+.B KT_WITH_UNKNOWN_DEVCODES
+Expose data-mined device identifiers in aliases and numeric diagnostic output.
+.TP
+.B KT_PKG_METADATA_DUMP
+Write shell-friendly parsed package metadata to this path.
+.TP
+.B TMPDIR
+Select the directory used for temporary package and archive files.
+.SH SAFETY
+Extraction rejects absolute paths, parent traversal, escaping symbolic or hard links, and paths
+whose existing ancestors are symbolic links. It refuses nonempty destinations and leaves no partial
+output when validation fails. Package creation never remounts or modifies a Kindle root filesystem.
+.SH LICENSE
+GPL-3.0-or-later. The C 1.6.6 implementation remains the compatibility oracle.
