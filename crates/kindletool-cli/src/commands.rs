@@ -132,6 +132,7 @@ fn convert_file(input: &Path, args: &ConvertArgs) -> Result<()> {
     } else {
         None
     };
+    let expected_hash = descriptor_md5(&descriptor);
 
     if args.stdout {
         let signature_path = if let Some(bytes) = signature.as_deref() {
@@ -145,7 +146,7 @@ fn convert_file(input: &Path, args: &ConvertArgs) -> Result<()> {
             None
         };
         if let Err(error) = staged_output(Path::new("-"), |writer| {
-            convert_payload(package, writer, args)
+            convert_to_file(package, writer, args, expected_hash)
         }) {
             if let Some(path) = signature_path {
                 let _ = fs::remove_file(path);
@@ -156,14 +157,9 @@ fn convert_file(input: &Path, args: &ConvertArgs) -> Result<()> {
     }
 
     let output = converted_name(input, args);
-    let expected_hash = descriptor_md5(&descriptor);
     eprintln!("Converting {} to {}", input.display(), output.display());
     atomic_write(&output, |writer| {
-        convert_payload(package, &mut *writer, args)?;
-        if !args.fake_sign && !effective_unwrap(args) {
-            validate_payload_hash(writer, expected_hash)?;
-        }
-        Ok(())
+        convert_to_file(package, writer, args, expected_hash)
     })?;
     if let Some(bytes) = signature.as_deref() {
         let signature_path = signature_name(input);
@@ -196,7 +192,10 @@ fn convert_stream<R: Read, W: Write>(input: R, mut output: W, args: &ConvertArgs
         dump_metadata(&descriptor)?;
         reject_android(&descriptor)?;
     } else {
-        convert_payload(package, &mut output, args)?;
+        let mut staged = tempfile::tempfile()?;
+        convert_to_file(package, &mut staged, args, descriptor_md5(&descriptor))?;
+        staged.seek(SeekFrom::Start(0))?;
+        io::copy(&mut staged, &mut output)?;
         output.flush()?;
     }
     Ok(())
@@ -216,6 +215,20 @@ fn convert_payload<R: Read, W: Write>(
             PayloadView::Decoded
         };
         package.copy_payload(view, writer)?;
+    }
+    Ok(())
+}
+
+fn convert_to_file<R: Read>(
+    package: Package<R>,
+    writer: &mut File,
+    args: &ConvertArgs,
+    expected_hash: Option<kindletool::Md5Digest>,
+) -> Result<()> {
+    convert_payload(package, &mut *writer, args)?;
+    writer.flush()?;
+    if !args.fake_sign && !effective_unwrap(args) {
+        validate_payload_hash(writer, expected_hash)?;
     }
     Ok(())
 }
