@@ -271,7 +271,7 @@ pub(crate) struct RecoveryV1Args {
     #[arg(long, default_value_t = 0)]
     pub(crate) minor: u32,
     #[arg(long)]
-    pub(crate) device: Option<u32>,
+    pub(crate) device: Option<String>,
     #[arg(long, default_value = "unspecified")]
     pub(crate) platform: String,
     #[arg(long, default_value = "unspecified")]

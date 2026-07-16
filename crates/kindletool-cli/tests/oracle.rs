@@ -229,14 +229,14 @@ fn fixed_archive_package_matrix_is_byte_identical_and_mutually_readable() {
         PackageCase {
             name: "fb01",
             c_create_arguments: &["create", "recovery", "-d", "k3w", "-b", "FB01", "-t", "max"],
-            rust_create_arguments: &["create", "recovery-v1", "--kind", "fb01", "--device", "6"],
+            rust_create_arguments: &["create", "recovery-v1", "--kind", "fb01", "--device", "k3w"],
             output_name: "update_fb01.bin",
             expected_magic: "FB01",
         },
         PackageCase {
             name: "fb02",
             c_create_arguments: &["create", "recovery", "-d", "k3w", "-b", "FB02", "-t", "max"],
-            rust_create_arguments: &["create", "recovery-v1", "--kind", "fb02", "--device", "6"],
+            rust_create_arguments: &["create", "recovery-v1", "--kind", "fb02", "--device", "k3w"],
             output_name: "update_fb02.bin",
             expected_magic: "FB02",
         },

@@ -312,12 +312,26 @@ fn create_spec(kind: CreateKind) -> Result<(PackageSpec, CreateCommon, u64)> {
             } else {
                 let device = args
                     .device
+                    .as_ref()
                     .ok_or_else(|| invalid("device", "legacy recovery requires --device"))?;
+                let devices = parse_devices(std::slice::from_ref(device))?;
+                if devices.len() != 1 {
+                    return Err(invalid(
+                        "device",
+                        "legacy recovery requires exactly one device",
+                    ));
+                }
                 let kind = match args.kind {
                     RecoveryV1KindArg::Fb01 => RecoveryV1Kind::Fb01,
                     RecoveryV1KindArg::Fb02 => RecoveryV1Kind::Fb02,
                 };
-                RecoveryV1Spec::legacy(kind, args.magic1, args.magic2, args.minor, device)
+                RecoveryV1Spec::legacy(
+                    kind,
+                    args.magic1,
+                    args.magic2,
+                    args.minor,
+                    u32::from(devices[0].0),
+                )
             };
             Ok((PackageSpec::RecoveryV1(spec), args.common, 131_072))
         }
