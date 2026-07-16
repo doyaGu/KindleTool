@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import argparse
 from pathlib import Path
 
 
@@ -16,6 +17,15 @@ TABLE = (ROOT / "KindleTool" / "kindle_table.h").read_text(encoding="utf-8")
 CREATE = (ROOT / "KindleTool" / "create.c").read_text(encoding="utf-8")
 
 BASE32 = "0123456789ABCDEFGHJKLMNPQRSTUVWX"
+CHECK = False
+
+
+def emit(path: Path, content: str) -> None:
+    if CHECK:
+        if not path.exists() or path.read_text(encoding="utf-8") != content:
+            raise SystemExit(f"generated file is stale: {path.relative_to(ROOT)}")
+        return
+    path.write_text(content, encoding="utf-8", newline="\n")
 
 
 def serial_code(code: int) -> str:
@@ -142,7 +152,7 @@ def generate_devices() -> None:
             "},"
         )
     lines.append("];\n")
-    (CRATE_SRC / "devices_generated.rs").write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    emit(CRATE_SRC / "devices_generated.rs", "\n".join(lines))
 
 
 def generate_tables() -> None:
@@ -159,7 +169,7 @@ def generate_tables() -> None:
         for offset in range(0, 256, 16):
             lines.append("    " + ", ".join(values[offset : offset + 16]) + ",")
         lines.append("];\n")
-    (CRATE_SRC / "tables_generated.rs").write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    emit(CRATE_SRC / "tables_generated.rs", "\n".join(lines))
 
 
 def generate_default_key() -> None:
@@ -176,10 +186,14 @@ def generate_default_key() -> None:
         value = sexp[item.end() : item.end() + length]
         lines.append(f'pub(crate) const RSA_{field.upper()}: &str = "{value.hex()}";')
     lines.append("")
-    (CRATE_SRC / "key_generated.rs").write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    emit(CRATE_SRC / "key_generated.rs", "\n".join(lines))
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--check", action="store_true", help="fail if committed generated files are stale")
+    arguments = parser.parse_args()
+    CHECK = arguments.check
     CRATE_SRC.mkdir(parents=True, exist_ok=True)
     generate_devices()
     generate_tables()
