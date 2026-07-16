@@ -1,6 +1,6 @@
 [package]
 name = "kindletool-cli"
-description = "Drop-in compatible KindleTool command-line application"
+description = "Correctness-oriented Kindle update package command-line application"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

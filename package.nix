@@ -5,7 +5,7 @@
 
 rustPlatform.buildRustPackage {
   pname = "kindletool";
-  version = "1.7.0";
+  version = "2.0.0";
   src = lib.cleanSource ./.;
 
   cargoLock.lockFile = ./Cargo.lock;
@@ -21,7 +21,7 @@ rustPlatform.buildRustPackage {
 
   meta = with lib; {
     homepage = "https://github.com/doyaGu/KindleTool";
-    description = "Create, inspect, convert, and safely extract Kindle update packages";
+    description = "Inspect, verify, extract, and create Kindle update packages";
     license = licenses.gpl3Plus;
     mainProgram = "kindletool";
     platforms = platforms.unix;
