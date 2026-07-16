@@ -50,6 +50,11 @@ combinations. `SigningKey` accepts 1024/2048-bit PKCS#1 or PKCS#8 PEM keys witho
 underlying cryptography crate. Safe extraction validates complete archives in private staging and
 atomically commits them to absent or empty destinations.
 
+`VerificationKey` accepts 1024/2048-bit PKCS#1 or SPKI PEM public keys. For seekable inputs,
+`PackageReader::verify` returns typed SP01 signature, decoded-payload integrity, and target-device
+compatibility results without exposing the underlying cryptography crate or changing the payload
+stream position.
+
 ### Compatibility verification
 
 Set `KINDLETOOL_C_ORACLE` to a C 1.6.6 executable to enable the bidirectional differential matrix:
