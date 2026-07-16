@@ -48,6 +48,8 @@ fn archive_path_accepts_only_normalized_relative_utf8_paths() {
         "../escape",
         "bin/../escape",
         "bin\\run.sh",
+        "C:/Windows/System32",
+        "C:drive-relative",
     ] {
         assert!(
             ArchivePath::new(unsafe_path).is_err(),

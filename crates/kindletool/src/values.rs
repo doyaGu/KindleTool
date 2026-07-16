@@ -159,9 +159,13 @@ impl ArchivePath {
     /// Validate a normalized, relative archive path using `/` separators.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
+        let bytes = value.as_bytes();
+        let windows_drive_prefix =
+            bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
         let valid = !value.is_empty()
             && !value.starts_with('/')
             && !value.contains('\\')
+            && !windows_drive_prefix
             && !value.chars().any(char::is_control)
             && value
                 .split('/')
