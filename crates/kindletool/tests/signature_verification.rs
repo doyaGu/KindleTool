@@ -3,9 +3,9 @@
 use kindletool::{
     ArchiveInput, ArchiveOptions, Certificate, DeviceCode, EncodeOptions, FirmwareRange,
     FirmwareRevision, OtaV1Kind, OtaV1Spec, Package, PackageEncoder, PackageSpec,
-    PayloadIntegrityCheck, PayloadSource, PayloadView, SignatureCheck, SigningKey,
-    TargetFieldCheck, UpdateArchiveBuilder, ValidationOutcome, VerificationContext,
-    VerificationLimits, VerificationPolicy,
+    PayloadIntegrityCheck, PayloadSource, PayloadView, RecoveryV1Kind, RecoveryV1Spec,
+    SignatureCheck, SigningKey, TargetFieldCheck, UpdateArchiveBuilder, ValidationOutcome,
+    VerificationContext, VerificationLimits, VerificationPolicy,
 };
 use std::fs;
 use std::io::Cursor;
@@ -116,13 +116,46 @@ fn tampered_payload_is_a_rejected_verdict_not_an_execution_error() {
     ));
 }
 
+#[test]
+fn legacy_recovery_rejects_a_mismatched_target_device() {
+    let key = SigningKey::default_jailbreak().unwrap();
+    let archive = test_archive_with_block_size(&key, 131_072);
+    let spec =
+        PackageSpec::RecoveryV1(RecoveryV1Spec::legacy(RecoveryV1Kind::Fb01, 0, 0, 0, 0x201));
+    let mut encoded = Vec::new();
+    PackageEncoder::encode(
+        &spec,
+        Cursor::new(archive),
+        &mut encoded,
+        EncodeOptions::unsigned(PayloadSource::Decoded),
+    )
+    .unwrap();
+    let context = VerificationContext::new()
+        .with_archive_key(key.verification_key())
+        .with_target_device(DeviceCode(0x202));
+    let mut package = Package::parse(Cursor::new(encoded)).unwrap();
+    let outcome = package
+        .verify(&context, VerificationPolicy::structural())
+        .unwrap();
+
+    assert!(matches!(outcome, ValidationOutcome::Rejected(_)));
+    assert_eq!(
+        outcome.report().target().device(),
+        TargetFieldCheck::Mismatch
+    );
+}
+
 fn test_archive(key: &SigningKey) -> Vec<u8> {
+    test_archive_with_block_size(key, 64)
+}
+
+fn test_archive_with_block_size(key: &SigningKey, block_size: u64) -> Vec<u8> {
     let source = tempfile::tempdir().unwrap();
     let input = source.path().join("install.sh");
     fs::write(&input, b"#!/bin/sh\nexit 0\n").unwrap();
     let mut archive = Vec::new();
     UpdateArchiveBuilder::new(key)
-        .options(ArchiveOptions::new(true, 64).unwrap())
+        .options(ArchiveOptions::new(true, block_size).unwrap())
         .build(
             &[ArchiveInput::from_source(source.path().to_path_buf()).unwrap()],
             &mut archive,
