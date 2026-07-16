@@ -61,6 +61,21 @@ fn build_fixed_archive(directory: &Path) -> Vec<u8> {
     archive
 }
 
+fn build_component_archive(directory: &Path) -> (Vec<u8>, Vec<u8>) {
+    let component = b"synthetic component payload".to_vec();
+    let source = directory.join("component.bin");
+    fs::write(&source, &component).unwrap();
+    let mut archive = Vec::new();
+    UpdateArchiveBuilder::new(&SigningKey::default_jailbreak().unwrap())
+        .options(ArchiveOptions::new(true, 64).unwrap())
+        .build(
+            &[kindletool::ArchiveInput::from_source(source).unwrap()],
+            &mut archive,
+        )
+        .unwrap();
+    (archive, component)
+}
+
 #[test]
 fn fixed_archive_package_matrix_is_byte_identical_and_mutually_readable() {
     let Some(oracle) = configured_oracle() else {
@@ -375,11 +390,11 @@ fn component_gzip_and_zip_detection_match_the_oracle() {
     };
     let rust = PathBuf::from(env!("CARGO_BIN_EXE_kindletool"));
     let temporary = tempfile::tempdir().unwrap();
-    let archive = build_fixed_archive(temporary.path());
+    let (archive, component_content) = build_component_archive(temporary.path());
     fs::create_dir(temporary.path().join("rust")).unwrap();
     fs::create_dir(temporary.path().join("c")).unwrap();
 
-    let component = component_package(&archive);
+    let component = component_package(&archive, &component_content);
     fs::write(temporary.path().join("rust/component.bin"), &component).unwrap();
     fs::write(temporary.path().join("c/component.bin"), &component).unwrap();
     let output = run(
@@ -431,8 +446,8 @@ fn component_gzip_and_zip_detection_match_the_oracle() {
     }
 }
 
-fn component_package(archive: &[u8]) -> Vec<u8> {
-    let sha256 = sha256_hex(&mut Cursor::new(archive)).unwrap();
+fn component_package(archive: &[u8], component_content: &[u8]) -> Vec<u8> {
+    let sha256 = sha256_hex(&mut Cursor::new(component_content)).unwrap();
     let mut package = vec![0_u8; 4 + RECOVERY_HEADER_LEN];
     package[..4].copy_from_slice(b"CB01");
     let raw = &mut package[4..];
