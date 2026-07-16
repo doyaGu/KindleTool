@@ -1,331 +1,297 @@
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use kindletool::{Board, BundleMagic, Certificate, DeviceCatalog, Platform};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "kindletool",
     version,
-    about = "Inspect, verify, extract, and create Kindle update packages",
-    disable_help_subcommand = true
+    about = "Create, inspect, convert, and extract Kindle update packages",
+    disable_version_flag = true,
+    disable_help_subcommand = true,
+    subcommand_required = true,
+    arg_required_else_help = true
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Command,
 }
 
+pub(crate) fn parse_from(arguments: Vec<String>) -> Cli {
+    let matches = command().get_matches_from(arguments);
+    Cli::from_arg_matches(&matches).expect("clap matches its derived CLI model")
+}
+
+pub(crate) fn command() -> clap::Command {
+    let mut command = Cli::command();
+    let create = command
+        .find_subcommand_mut("create")
+        .expect("derived CLI contains create");
+    *create = create.clone().after_long_help(create_catalog_help());
+    command
+}
+
+fn create_catalog_help() -> String {
+    let mut output = String::from(
+        "Device aliases (generated from DeviceCatalog; aliases gated by the environment are marked):\n",
+    );
+    for (name, description) in DeviceCatalog::aliases() {
+        let _ = writeln!(output, "  {name:<18} {description}");
+    }
+
+    output.push_str("\nPlatforms:\n");
+    for (platform, cli_name, display_name) in Platform::known() {
+        let _ = writeln!(
+            output,
+            "  {cli_name:<18} {display_name} ({})",
+            platform.raw()
+        );
+    }
+
+    output.push_str("\nBoards:\n");
+    for (board, cli_name, display_name) in Board::known() {
+        let _ = writeln!(output, "  {cli_name:<18} {display_name} ({})", board.raw());
+    }
+
+    output.push_str("\nBundle magic values:\n");
+    for (magic, description) in BundleMagic::known() {
+        let _ = writeln!(output, "  {magic:<18} {description}");
+    }
+
+    output.push_str("\nCertificates:\n");
+    for certificate in Certificate::known() {
+        let _ = writeln!(
+            output,
+            "  {:<18} {} ({}-byte signature)",
+            certificate.raw(),
+            certificate.label(),
+            certificate.signature_len()
+        );
+    }
+    output
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
-    /// Parse package metadata without claiming authenticity.
-    Inspect(InspectArgs),
-    /// Verify package structure, signatures, archive, and target metadata.
-    Verify(VerifyArgs),
-    /// Verify and atomically extract a package archive.
+    /// Apply Kindle's byte substitution ("mangle") transform.
+    Md(TransformArgs),
+    /// Reverse Kindle's byte substitution ("demangle") transform.
+    Dm(TransformArgs),
+    /// Convert packages to archives, signatures, or unwrapped packages.
+    Convert(ConvertArgs),
+    /// Extract a package archive into a directory.
     Extract(ExtractArgs),
-    /// Export an explicit package representation.
-    Export(ExportArgs),
-    /// Create a Kindle package.
-    Create(CreateArgs),
-    /// Apply a Kindle byte codec.
-    Codec(CodecArgs),
-    /// Print passwords and model information for a serial number.
-    Serial(SerialArgs),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum OutputFormat {
-    Human,
-    Json,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum PolicyArg {
-    Structural,
-    Authentic,
+    /// Create a Kindle update package.
+    Create(Box<CreateArgs>),
+    /// Print passwords and model information for a Kindle serial number.
+    Info(InfoArgs),
+    /// Print version and build information.
+    Version,
+    /// Print general help or help for one command.
+    Help(HelpArgs),
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct InspectArgs {
-    /// Package file, or `-` for stdin.
-    pub(crate) input: PathBuf,
-    /// Output representation.
-    #[arg(long, value_enum, default_value = "human")]
-    pub(crate) format: OutputFormat,
+pub(crate) struct TransformArgs {
+    /// Input file; stdin when omitted or `-`.
+    pub(crate) input: Option<PathBuf>,
+    /// Output file; stdout when omitted or `-`.
+    pub(crate) output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct VerifyArgs {
-    /// Package file, or `-` for stdin.
-    pub(crate) input: PathBuf,
-    /// Verification policy (authentic by default).
-    #[arg(long, value_enum, default_value = "authentic")]
-    pub(crate) policy: PolicyArg,
-    /// SP01 public key in PKCS#1/SPKI PEM.
-    #[arg(long)]
-    pub(crate) key: Option<PathBuf>,
-    /// Certificate selector associated with --key.
-    #[arg(long, default_value_t = 0)]
-    pub(crate) certificate: u32,
-    /// Archive signature public key; defaults to --key or the built-in developer key.
-    #[arg(long)]
-    pub(crate) archive_key: Option<PathBuf>,
-    /// Optional target device code or alias.
-    #[arg(long)]
-    pub(crate) device: Option<String>,
-    /// Optional target firmware revision.
-    #[arg(long)]
-    pub(crate) firmware: Option<u64>,
-    /// Optional target platform name.
-    #[arg(long)]
-    pub(crate) platform: Option<String>,
-    /// Optional target board name.
-    #[arg(long)]
-    pub(crate) board: Option<String>,
-    /// Output representation.
-    #[arg(long, value_enum, default_value = "human")]
-    pub(crate) format: OutputFormat,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct ExtractArgs {
-    /// Package file, or `-` for stdin.
-    pub(crate) input: PathBuf,
-    /// New or empty destination directory.
-    pub(crate) output: PathBuf,
-    /// Verification policy (structural by default).
-    #[arg(long, value_enum, default_value = "structural")]
-    pub(crate) policy: PolicyArg,
-    /// SP01 public key.
-    #[arg(long)]
-    pub(crate) key: Option<PathBuf>,
-    /// Certificate selector associated with --key.
-    #[arg(long, default_value_t = 0)]
-    pub(crate) certificate: u32,
-    /// Archive signature public key.
-    #[arg(long)]
-    pub(crate) archive_key: Option<PathBuf>,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct ExportArgs {
-    #[command(subcommand)]
-    pub(crate) kind: ExportKind,
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum ExportKind {
-    /// Export decoded or exact stored payload bytes.
-    Payload(PayloadExportArgs),
-    /// Export the raw SP01 signature.
-    Signature(IoArgs),
-    /// Remove exactly one SP01 envelope.
-    Inner(IoArgs),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum PayloadViewArg {
-    Decoded,
-    Stored,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct PayloadExportArgs {
-    /// Payload representation; must be explicit.
-    #[arg(long, value_enum)]
-    pub(crate) view: PayloadViewArg,
-    #[command(flatten)]
-    pub(crate) io: IoArgs,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct IoArgs {
-    /// Input file, or `-` for stdin.
-    pub(crate) input: PathBuf,
-    /// Output file, or `-` for stdout.
-    #[arg(short, long)]
-    pub(crate) output: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct CodecArgs {
-    #[command(subcommand)]
-    pub(crate) kind: CodecKind,
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum CodecKind {
-    Mangle(IoArgs),
-    Demangle(IoArgs),
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct SerialArgs {
-    pub(crate) serial: String,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct CreateArgs {
-    #[command(subcommand)]
-    pub(crate) kind: CreateKind,
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum CreateKind {
-    OtaV1(OtaV1Args),
-    OtaV2(OtaV2Args),
-    RecoveryV1(RecoveryV1Args),
-    RecoveryV2(RecoveryV2Args),
-    Userdata(UserdataArgs),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum EnvelopeArg {
-    Auto,
-    Signed,
-    None,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum OtaV1KindArg {
-    Ota,
-    Versionless,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum OtaV2KindArg {
-    Ota,
-    Versionless,
-    Language,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum RecoveryV1KindArg {
-    Fb01,
-    Fb02,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct CreateCommon {
-    /// Final package path; `-` writes staged output to stdout.
-    #[arg(short, long)]
-    pub(crate) output: PathBuf,
-    /// Use this prebuilt archive instead of building inputs.
-    #[arg(long)]
-    pub(crate) archive: Option<PathBuf>,
-    /// SP01 envelope policy.
-    #[arg(long, value_enum, default_value = "auto")]
-    pub(crate) envelope: EnvelopeArg,
-    /// PKCS#1/PKCS#8 private key; defaults to the jailbreak key.
-    #[arg(long)]
-    pub(crate) key: Option<PathBuf>,
-    /// Certificate selector.
-    #[arg(long, default_value_t = 0)]
-    pub(crate) certificate: u32,
-    /// Preserve legacy archive path semantics.
-    #[arg(long)]
-    pub(crate) legacy_paths: bool,
-    /// Files and directories added in command-line order.
+#[allow(clippy::struct_excessive_bools)]
+pub(crate) struct ConvertArgs {
+    #[arg(short = 'c', long = "stdout")]
+    pub(crate) stdout: bool,
+    #[arg(short = 'i', long = "info")]
+    pub(crate) inspect: bool,
+    #[arg(short = 'k', long = "keep")]
+    pub(crate) keep: bool,
+    #[arg(short = 's', long = "sig")]
+    pub(crate) signature: bool,
+    #[arg(short = 'u', long = "unsigned")]
+    pub(crate) fake_sign: bool,
+    #[arg(short = 'w', long = "unwrap")]
+    pub(crate) unwrap: bool,
+    #[arg(required = true)]
     pub(crate) inputs: Vec<PathBuf>,
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct OtaV1Args {
-    #[arg(long, value_enum, default_value = "ota")]
-    pub(crate) kind: OtaV1KindArg,
-    #[arg(long)]
-    pub(crate) source_revision: u64,
-    #[arg(long)]
-    pub(crate) target_revision: u64,
-    #[arg(long)]
-    pub(crate) device: String,
-    #[arg(long, default_value_t = 0)]
-    pub(crate) optional: u8,
-    #[command(flatten)]
-    pub(crate) common: CreateCommon,
+pub(crate) struct ExtractArgs {
+    #[arg(short = 'u', long = "unsigned")]
+    pub(crate) fake_sign: bool,
+    pub(crate) input: PathBuf,
+    pub(crate) output: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub(crate) enum CreateType {
+    Ota,
+    Ota2,
+    Recovery,
+    Recovery2,
+    Sig,
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct OtaV2Args {
-    #[arg(long, value_enum, default_value = "ota")]
-    pub(crate) kind: OtaV2KindArg,
-    #[arg(long)]
-    pub(crate) source_revision: u64,
-    #[arg(long)]
-    pub(crate) target_revision: u64,
-    #[arg(long, required = true)]
-    pub(crate) device: Vec<String>,
-    #[arg(long, default_value_t = 0)]
-    pub(crate) critical: u8,
-    #[arg(long)]
-    pub(crate) metadata: Vec<String>,
-    #[command(flatten)]
-    pub(crate) common: CreateCommon,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct RecoveryV1Args {
-    #[arg(long, value_enum, default_value = "fb02")]
-    pub(crate) kind: RecoveryV1KindArg,
-    #[arg(long)]
-    pub(crate) target_revision: Option<u64>,
-    #[arg(long, default_value_t = 0)]
-    pub(crate) magic1: u32,
-    #[arg(long, default_value_t = 0)]
-    pub(crate) magic2: u32,
-    #[arg(long, default_value_t = 0)]
-    pub(crate) minor: u32,
-    #[arg(long)]
-    pub(crate) device: Option<String>,
-    #[arg(long, default_value = "unspecified")]
+#[command(disable_help_flag = true)]
+#[allow(clippy::struct_excessive_bools)]
+pub(crate) struct CreateArgs {
+    #[arg(value_enum)]
+    pub(crate) package_type: CreateType,
+    #[arg(short = 'd', long = "device", action = ArgAction::Append)]
+    pub(crate) devices: Vec<String>,
+    #[arg(short = 'k', long = "key")]
+    pub(crate) key: Option<PathBuf>,
+    #[arg(short = 'b', long = "bundle")]
+    pub(crate) bundle: Option<String>,
+    #[arg(short = 's', long = "srcrev")]
+    pub(crate) source_revision: Option<String>,
+    #[arg(short = 't', long = "tgtrev")]
+    pub(crate) target_revision: Option<String>,
+    #[arg(short = '1', long = "magic1", default_value = "0")]
+    pub(crate) magic_1: String,
+    #[arg(short = '2', long = "magic2", default_value = "0")]
+    pub(crate) magic_2: String,
+    #[arg(short = 'm', long = "minor", default_value = "0")]
+    pub(crate) minor: String,
+    #[arg(short = 'p', long = "platform", default_value = "unspecified")]
     pub(crate) platform: String,
-    #[arg(long, default_value = "unspecified")]
+    #[arg(short = 'B', long = "board", default_value = "unspecified")]
     pub(crate) board: String,
-    #[command(flatten)]
-    pub(crate) common: CreateCommon,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct RecoveryV2Args {
-    #[arg(long)]
-    pub(crate) target_revision: u64,
-    #[arg(long, default_value_t = 0)]
-    pub(crate) magic1: u32,
-    #[arg(long, default_value_t = 0)]
-    pub(crate) magic2: u32,
-    #[arg(long, default_value_t = 0)]
-    pub(crate) minor: u32,
-    #[arg(long, default_value = "unspecified")]
-    pub(crate) platform: String,
-    #[arg(long, default_value_t = 0)]
+    #[arg(short = 'h', long = "hdrrev", default_value_t = 0)]
     pub(crate) header_revision: u32,
-    #[arg(long, default_value = "unspecified")]
-    pub(crate) board: String,
-    #[arg(long, required = true)]
-    pub(crate) device: Vec<String>,
-    #[command(flatten)]
-    pub(crate) common: CreateCommon,
+    #[arg(short = 'c', long = "cert", default_value_t = 0)]
+    pub(crate) certificate: u16,
+    #[arg(short = 'o', long = "opt", default_value_t = 0)]
+    pub(crate) optional: u8,
+    #[arg(short = 'r', long = "crit", default_value_t = 0)]
+    pub(crate) critical: u8,
+    #[arg(short = 'x', long = "meta", action = ArgAction::Append)]
+    pub(crate) metadata: Vec<String>,
+    #[arg(short = 'a', long = "archive")]
+    pub(crate) keep_archive: bool,
+    #[arg(short = 'u', long = "unsigned")]
+    pub(crate) unsigned: bool,
+    #[arg(short = 'U', long = "userdata")]
+    pub(crate) userdata: bool,
+    #[arg(short = 'O', long = "ota")]
+    pub(crate) official_ota: bool,
+    #[arg(short = 'C', long = "legacy")]
+    pub(crate) legacy_paths: bool,
+    #[arg(short = 'X', long = "packaging")]
+    pub(crate) packaging_metadata: bool,
+    #[arg(long = "help", action = ArgAction::Help)]
+    pub(crate) help: Option<bool>,
+    #[arg(required = true, num_args = 1..)]
+    pub(crate) paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct UserdataArgs {
-    #[command(flatten)]
-    pub(crate) common: CreateCommon,
+pub(crate) struct InfoArgs {
+    pub(crate) serial: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct HelpArgs {
+    pub(crate) command: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, ExportKind};
+    use super::{Cli, Command, command};
     use clap::Parser;
+    use kindletool::DeviceCatalog;
 
     #[test]
-    fn new_commands_parse_and_legacy_commands_do_not() {
-        assert!(matches!(
-            Cli::try_parse_from(["kindletool", "inspect", "update.bin"])
-                .unwrap()
-                .command,
-            Command::Inspect(_)
-        ));
-        assert!(
-            matches!(Cli::try_parse_from(["kindletool", "export", "payload", "--view", "stored", "in.bin", "--output", "-"]).unwrap().command, Command::Export(args) if matches!(args.kind, ExportKind::Payload(_)))
-        );
-        assert!(Cli::try_parse_from(["kindletool", "convert", "update.bin"]).is_err());
-        assert!(Cli::try_parse_from(["kindletool", "md"]).is_err());
-        assert!(Cli::try_parse_from(["kindletool", "help"]).is_err());
+    fn legacy_convert_long_options_are_preserved() {
+        let cli = Cli::try_parse_from([
+            "kindletool",
+            "convert",
+            "--stdout",
+            "--info",
+            "--keep",
+            "--sig",
+            "--unsigned",
+            "--unwrap",
+            "update.bin",
+        ])
+        .expect("legacy convert options should parse");
+        let Command::Convert(args) = cli.command else {
+            panic!("expected convert command");
+        };
+        assert!(args.stdout && args.inspect && args.keep && args.signature);
+        assert!(args.fake_sign && args.unwrap);
+    }
+
+    #[test]
+    fn legacy_create_long_options_are_preserved() {
+        let cli = Cli::try_parse_from([
+            "kindletool",
+            "create",
+            "ota2",
+            "--device",
+            "none",
+            "--bundle",
+            "FD04",
+            "--srcrev",
+            "min",
+            "--tgtrev",
+            "max",
+            "--magic1",
+            "0",
+            "--magic2",
+            "0",
+            "--minor",
+            "0",
+            "--platform",
+            "unspecified",
+            "--board",
+            "unspecified",
+            "--hdrrev",
+            "0",
+            "--cert",
+            "0",
+            "--opt",
+            "0",
+            "--crit",
+            "0",
+            "--meta",
+            "key=value",
+            "--packaging",
+            "--archive",
+            "--ota",
+            "--legacy",
+            "input.tar.gz",
+            "update.bin",
+        ])
+        .expect("legacy create options should parse");
+        let Command::Create(args) = cli.command else {
+            panic!("expected create command");
+        };
+        assert_eq!(args.source_revision.as_deref(), Some("min"));
+        assert_eq!(args.target_revision.as_deref(), Some("max"));
+        assert_eq!(args.metadata, ["key=value"]);
+        assert!(args.packaging_metadata && args.keep_archive);
+        assert!(args.official_ota && args.legacy_paths);
+    }
+
+    #[test]
+    fn create_help_is_generated_from_the_device_catalog() {
+        let mut command = command();
+        let help = command
+            .find_subcommand_mut("create")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        for (alias, _) in DeviceCatalog::aliases() {
+            assert!(help.contains(alias), "create help omitted alias {alias}");
+        }
+        assert!(help.contains("bellatrix3"));
+        assert!(help.contains("pubprodkey02.pem"));
+        assert!(help.contains("FD04"));
     }
 }
