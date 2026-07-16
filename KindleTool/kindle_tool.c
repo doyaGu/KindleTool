@@ -910,7 +910,9 @@ static int
     kindle_print_version(const char* prog_name)
 {
 	printf("%s (KindleTool) %s built by %s with ", prog_name, KT_VERSION, KT_USERATHOST);
-#ifdef __clang__
+#if defined(_MSC_VER)
+	printf("MSVC %d ", _MSC_VER);
+#elif defined(__clang__)
 	printf("Clang %s ", __clang_version__);
 #else
 	printf("GCC %s ", __VERSION__);
@@ -1135,6 +1137,12 @@ int
 		strcpy(kt_tempdir, KT_TMPDIR);
 	} else {
 		// Check that our supposedly sane platform-specific tempdir actually exists, and that we can write to it...
+#if defined(_WIN32) && !defined(__CYGWIN__)
+		DWORD attributes = GetFileAttributes(kt_tempdir);
+		if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+			strcpy(kt_tempdir, KT_TMPDIR);
+		}
+#else
 		struct stat st;
 		if (stat(kt_tempdir, &st) == -1) {
 			// ... couldn't stat it (doesn't exist, couldn't be searched):
@@ -1148,6 +1156,7 @@ int
 			// ... we can't write into that directory: use our fallback directory and hope for the best
 			strcpy(kt_tempdir, KT_TMPDIR);
 		}
+#endif
 	}
 
 	prog_name = argv[0];

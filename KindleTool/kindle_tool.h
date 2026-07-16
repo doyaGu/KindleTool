@@ -34,7 +34,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -42,7 +41,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
-#include <unistd.h>
+#if defined(_MSC_VER)
+#	include "msvc_compat.h"
+#else
+#	include <getopt.h>
+#	include <unistd.h>
+#endif
 #if !defined(_WIN32) && !defined(__CYGWIN__)
 #	include <pwd.h>
 #endif
@@ -50,7 +54,9 @@
 #if defined(__linux__)
 #	include <linux/limits.h>
 #endif
-#include <libgen.h>
+#if !defined(_MSC_VER)
+#	include <libgen.h>
+#endif
 
 // libarchive does not pull that in for us anymore ;).
 #if defined(_WIN32) && !defined(__CYGWIN__)
@@ -532,6 +538,9 @@ typedef struct
 	uint32_t      device;
 } RecoveryUpdateHeader;
 
+#if defined(_MSC_VER)
+#	pragma pack(push, 1)
+#endif
 typedef struct
 {
 	unsigned char foo[4];
@@ -544,6 +553,9 @@ typedef struct
 	uint32_t      header_rev;
 	uint32_t      board;
 } __attribute__((packed)) RecoveryH2UpdateHeader;    // FB02 with V2 Header, not FB03
+#if defined(_MSC_VER)
+#	pragma pack(pop)
+#endif
 
 typedef struct
 {

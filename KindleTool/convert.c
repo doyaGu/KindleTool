@@ -331,7 +331,12 @@ static int
 	data      = calloc(num_devices, sizeof(uint16_t));
 	pos       = data;
 	read_size = fread(data, sizeof(uint16_t), num_devices, input);
-	uint16_t device_list[num_devices];    // VLA, solely for the metadata dump's sake
+	uint16_t* device_list = calloc(num_devices, sizeof(*device_list));
+	if (num_devices != 0 && device_list == NULL) {
+		fprintf(stderr, "Cannot allocate device list.\n");
+		free(data);
+		return -1;
+	}
 	for (size_t i = 0; i < num_devices; i++) {
 		uint16_t device;
 		consume_header_item(&device, &pos, sizeof(device));
@@ -399,6 +404,7 @@ static int
 
 	if (ferror(input) != 0) {
 		fprintf(stderr, "Cannot read update correctly: %s.\n", strerror(errno));
+		free(device_list);
 		return -1;
 	}
 
@@ -406,7 +412,8 @@ static int
 	if (kt_pkg_metadata_dump) {
 		FILE* f = fopen(kt_pkg_metadata_dump, "w");
 		if (!f) {
-			fprintf(stderr, "Unable to open metadata dump file for writing: %m");
+			fprintf(stderr, "Unable to open metadata dump file for writing: %s", strerror(errno));
+			free(device_list);
 			return -1;
 		}
 		// NOTE: Magic is not actually accurate, but we don't have a pointer to the earlier data anymore
@@ -458,6 +465,7 @@ static int
 		// NOTE: We don't dump the actual metadata strings, as we'd need to safely escape them, and I'm lazy.
 		fclose(f);
 	}
+	free(device_list);
 
 	if (output == NULL) {
 		return 0;
@@ -566,7 +574,7 @@ static int
 	if (kt_pkg_metadata_dump) {
 		FILE* f = fopen(kt_pkg_metadata_dump, "w");
 		if (!f) {
-			fprintf(stderr, "Unable to open metadata dump file for writing: %m");
+			fprintf(stderr, "Unable to open metadata dump file for writing: %s", strerror(errno));
 			return -1;
 		}
 		fprintf(f,
@@ -681,7 +689,7 @@ static int
 	if (kt_pkg_metadata_dump) {
 		FILE* f = fopen(kt_pkg_metadata_dump, "w");
 		if (!f) {
-			fprintf(stderr, "Unable to open metadata dump file for writing: %m");
+			fprintf(stderr, "Unable to open metadata dump file for writing: %s", strerror(errno));
 			return -1;
 		}
 		fprintf(f,
@@ -785,7 +793,12 @@ static int
 	pos += 7;    // Padding
 	consume_header_item(&num_devices, &pos, sizeof(num_devices));
 	fprintf(stderr, "Devices        %hhu\n", num_devices);
-	uint16_t device_list[num_devices];    // VLA, solely for the metadata dump's sake
+	uint16_t* device_list = calloc(num_devices, sizeof(*device_list));
+	if (num_devices != 0 && device_list == NULL) {
+		fprintf(stderr, "Cannot allocate device list.\n");
+		free(data);
+		return -1;
+	}
 	for (size_t i = 0; i < num_devices; i++) {
 		uint16_t device;
 		consume_header_item(&device, &pos, sizeof(device));
@@ -820,6 +833,7 @@ static int
 
 	if (ferror(input) != 0) {
 		fprintf(stderr, "Cannot read update correctly: %s.\n", strerror(errno));
+		free(device_list);
 		return -1;
 	}
 
@@ -827,7 +841,8 @@ static int
 	if (kt_pkg_metadata_dump) {
 		FILE* f = fopen(kt_pkg_metadata_dump, "w");
 		if (!f) {
-			fprintf(stderr, "Unable to open metadata dump file for writing: %m");
+			fprintf(stderr, "Unable to open metadata dump file for writing: %s", strerror(errno));
+			free(device_list);
 			return -1;
 		}
 		fprintf(f,
@@ -884,6 +899,7 @@ static int
 		}
 		fclose(f);
 	}
+	free(device_list);
 
 	if (output == NULL) {
 		return 0;
@@ -932,7 +948,12 @@ static int
 	fprintf(stderr, "Header Rev     %u\n", header_rev);
 	consume_header_item(&num_devices, &pos, sizeof(num_devices));
 	fprintf(stderr, "Devices        %u\n", num_devices);
-	uint16_t device_list[num_devices];    // VLA, solely for the metadata dump's sake
+	uint16_t* device_list = calloc(num_devices, sizeof(*device_list));
+	if (num_devices != 0 && device_list == NULL) {
+		fprintf(stderr, "Cannot allocate device list.\n");
+		free(data);
+		return -1;
+	}
 	for (size_t i = 0; i < num_devices; i++) {
 		uint16_t device;
 		consume_header_item(&device, &pos, sizeof(device));
@@ -967,6 +988,7 @@ static int
 
 	if (ferror(input) != 0) {
 		fprintf(stderr, "Cannot read update correctly: %s.\n", strerror(errno));
+		free(device_list);
 		return -1;
 	}
 
@@ -974,7 +996,8 @@ static int
 	if (kt_pkg_metadata_dump) {
 		FILE* f = fopen(kt_pkg_metadata_dump, "w");
 		if (!f) {
-			fprintf(stderr, "Unable to open metadata dump file for writing: %m");
+			fprintf(stderr, "Unable to open metadata dump file for writing: %s", strerror(errno));
+			free(device_list);
 			return -1;
 		}
 		fprintf(f,
@@ -1025,6 +1048,7 @@ static int
 		}
 		fclose(f);
 	}
+	free(device_list);
 
 	if (output == NULL) {
 		return 0;
