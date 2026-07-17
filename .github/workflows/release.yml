@@ -138,9 +138,23 @@ jobs:
         run: sha256sum kindletool-* > SHA256SUMS
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: false
-          generate_release_notes: true
-          make_latest: true
-          files: artifacts/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3 4; do
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              if gh release upload "$GITHUB_REF_NAME" artifacts/* --clobber &&
+                 gh release edit "$GITHUB_REF_NAME" --latest; then
+                exit 0
+              fi
+            elif gh release create "$GITHUB_REF_NAME" artifacts/* \
+              --generate-notes \
+              --latest \
+              --verify-tag; then
+              exit 0
+            fi
+
+            sleep $((attempt * 10))
+          done
+
+          exit 1
