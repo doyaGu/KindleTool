@@ -98,7 +98,7 @@ mod tests {
     use super::serial_info;
 
     #[test]
-    fn known_pw3_matches_c_oracle() {
+    fn known_pw3_serial_vector_is_stable() {
         let info = serial_info("G090G1XXXXXXXXXX").unwrap();
         assert_eq!(info.root_password, "fionad14");
         assert_eq!(info.recovery_password, "fionad146");

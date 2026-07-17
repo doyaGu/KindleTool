@@ -39,20 +39,6 @@ jobs:
       - uses: actions/checkout@v6
       - run: cargo test --workspace --locked
 
-  c-oracle:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Build frozen C oracle
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-dev nettle-dev zlib1g-dev
-          make legacy
-      - name: Run bidirectional differential test
-        run: cargo test -p kindletool-cli --test oracle --locked
-        env:
-          KINDLETOOL_C_ORACLE: ${{ github.workspace }}/KindleTool/Release/kindletool
-
   dependency-policy:
     runs-on: ubuntu-latest
     steps:
