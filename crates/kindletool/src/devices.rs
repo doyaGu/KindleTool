@@ -98,7 +98,7 @@ pub struct DeviceRecord {
     pub requires_unknown_flag: bool,
 }
 
-include!("devices_generated.rs");
+include!("device_catalog_data.rs");
 
 #[derive(Clone, Copy, Debug)]
 enum DeviceAliasKind {

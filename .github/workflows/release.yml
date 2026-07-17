@@ -17,9 +17,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generated table consistency
-        run: python3 tools/generate_legacy_tables.py --check
-
       - name: Install stable quality components
         run: rustup component add rustfmt clippy
 

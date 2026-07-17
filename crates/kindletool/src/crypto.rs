@@ -13,7 +13,7 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-include!("key_generated.rs");
+include!("default_key.rs");
 
 /// RSA signing key hidden behind a stable KindleTool-owned API.
 #[derive(Clone)]

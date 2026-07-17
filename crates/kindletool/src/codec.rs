@@ -1,6 +1,6 @@
 use std::io::{self, Read, Write};
 
-include!("tables_generated.rs");
+include!("codec_tables.rs");
 
 /// Transform bytes with Amazon's update-package obfuscation table.
 pub fn mangle(bytes: &mut [u8]) {
