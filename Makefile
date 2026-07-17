@@ -1,4 +1,4 @@
-# Rust is the main implementation. The C implementation remains available as the legacy oracle.
+# Cargo-backed convenience targets for the Rust implementation.
 
 CARGO ?= cargo
 CARGO_FLAGS ?= --locked
@@ -28,29 +28,4 @@ clean:
 install:
 	$(CARGO) install --path crates/kindletool-cli $(CARGO_FLAGS)
 
-legacy:
-	$(MAKE) -C KindleTool all
-
-legacy-kindle:
-	$(MAKE) -C KindleTool kindle
-
-legacy-mingw:
-	$(MAKE) -C KindleTool mingw
-
-legacy-debug:
-	$(MAKE) -C KindleTool debug
-
-legacy-strip:
-	$(MAKE) -C KindleTool strip
-
-legacy-clean:
-	$(MAKE) -C KindleTool clean
-
-legacy-install:
-	$(MAKE) -C KindleTool install
-
-legacy-format:
-	clang-format -style=file -i KindleTool/*.c KindleTool/*.h
-
-.PHONY: default all debug test check format clean install legacy legacy-kindle legacy-mingw \
-	legacy-debug legacy-strip legacy-clean legacy-install legacy-format
+.PHONY: default all debug test check format clean install

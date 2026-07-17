@@ -1,10 +1,6 @@
 # Ignore Kdevelop related stuff
 *.kdev4
 
-# Ignore extra XCode related stuff
-KindleTool.xcodeproj/project.xcworkspace
-KindleTool.xcodeproj/xcuserdata
-
 # Nix Build Output
 result
 
@@ -14,6 +10,6 @@ result
 /fuzz/artifacts/
 /fuzz/corpus/
 
-# CMake and vcpkg local build output
+# Local build output retained by older checkouts
 /out/
 /vcpkg_installed/
