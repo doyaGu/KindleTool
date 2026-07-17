@@ -65,6 +65,7 @@ links, unsupported entries, and manifest mismatches. Output files and extraction
 staged, flushed, validated, and committed only on success.
 .SH COMPATIBILITY
 Version 2.0 retains the v1.6.6/1.7 command interface. Its breaking changes are limited to the Rust
-library API. The C v1.6.6 implementation remains the differential-test oracle.
+library API. Compatibility is maintained by Rust golden vectors, package and archive fixtures,
+property tests, fuzzing, and the optional read-only corpus harness.
 .SH LICENSE
 GPL-3.0-or-later.

@@ -6,6 +6,7 @@ KindleTool contributors. The byte-mangling tables, update-header layouts, device
 catalog, embedded jailbreak key, archive manifest conventions, and password derivation
 retain their original provenance and licensing.
 
-The C implementation under `KindleTool/` is intentionally retained as the frozen
-compatibility oracle. Generated Rust lookup files identify the generator that imports
-the relevant compatibility data; they are not independently authored lookup tables.
+The historical C implementation remains available in Git history and the `v2.0.1`
+source tag. It is no longer shipped on the main branch. The canonical Rust device
+catalog, byte-mangling tables, and embedded key remain derived compatibility data;
+they are not independently authored lookup tables.

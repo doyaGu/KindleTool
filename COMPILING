@@ -23,22 +23,10 @@ provides equivalent entry points:
 Release CI publishes Windows x64, Linux x64 musl, macOS x64, and macOS ARM64 executables. Kindle
 ARM targets are intentionally outside this desktop release.
 
-Legacy C oracle
----------------
+Compatibility validation
+------------------------
 
-The C 1.6.6 implementation remains available for compatibility verification. It requires nettle,
-libarchive >= 3.0.3 with gzip support, and zlib. Build it explicitly with:
-
-	make legacy
-
-Other preserved targets are legacy-kindle, legacy-mingw, legacy-debug, legacy-strip,
-legacy-clean, legacy-install, and legacy-format.
-
-For a native Visual Studio 2022 build, install libarchive, nettle, gmp, and zlib through vcpkg,
-set VCPKG_ROOT, then run:
-
-	cmake --preset vs2022-x64
-	cmake --build --preset vs2022-x64-release
-
-The native C executable is written to out/build/vs2022-x64/Release. The older static-build and
-cross-compilation helpers under tools/ continue to target the legacy C implementation.
+The repository is Rust-only. Protocol compatibility is covered by committed golden vectors,
+catalog and round-trip tests, adversarial archive tests, property tests, fuzz targets, and the
+optional read-only package corpus documented in README.md. No C compiler or native library is
+required.

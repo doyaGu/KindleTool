@@ -8,7 +8,8 @@ keeps the established v1.6.6 command line and disk formats while replacing the p
 
 It recognizes FB01/FB02/FB03, FC02/FC04, FD03/FD04, FL01, SP01, CB01, gzip, and ZIP. The parser
 uses checked little-endian reads and contains no `unsafe`. Package rules come from one static Rust
-format catalog; the frozen C implementation under [`KindleTool/`](KindleTool/) remains the oracle.
+format catalog, with compatibility protected by golden vectors, property tests, fuzzing, and a
+read-only package corpus.
 
 ## Install and build
 
@@ -22,7 +23,7 @@ cargo test --workspace --locked
 ```
 
 Rust 1.85 or newer is required. The release binary is `target/release/kindletool` (or
-`kindletool.exe`). `make` builds Rust; `make legacy` builds the C oracle.
+`kindletool.exe`). The root `Makefile` provides Cargo-backed build, test, check, and install targets.
 
 ## CLI
 
@@ -85,17 +86,15 @@ Third-party RSA, tar, and gzip types do not appear in the public API.
 
 ## Compatibility and development
 
-```sh
-python3 tools/generate_legacy_tables.py --check
-make legacy
-KINDLETOOL_C_ORACLE=KindleTool/Release/kindletool \
-  cargo test -p kindletool-cli --test oracle --locked
-```
+Device codes, mangle tables, and the jailbreak key are canonical Rust compatibility data. New
+formats normally require one `FormatRecord`; a new header layout is added only when the on-disk
+structure is genuinely different. Catalog invariants, golden vectors, round trips, adversarial
+archives, property tests, and fuzz targets are enforced in CI. The project is GPL-3.0-or-later
+and is not published to crates.io.
 
-Generated device, mangle, and jailbreak-key tables are derived from the frozen C oracle and
-checked in CI. New formats normally require one `FormatRecord`; a new header codec is added only
-when the on-disk layout is genuinely different. The project is GPL-3.0-or-later and is not
-published to crates.io.
+The historical C implementation was removed from the main branch after the Rust implementation
+became authoritative. It remains available in Git history and the `v2.0.1` source tag for
+archaeology and attribution, but is no longer a build or test dependency.
 
 Local packages that cannot be redistributed can be verified through the read-only corpus harness.
 Paths use the host platform's path-list separator. Every source is copied to temporary storage
