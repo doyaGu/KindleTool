@@ -1,6 +1,3 @@
-# Ignore Kdevelop related stuff
-*.kdev4
-
 # Nix Build Output
 result
 
@@ -9,7 +6,3 @@ result
 /fuzz/target/
 /fuzz/artifacts/
 /fuzz/corpus/
-
-# Local build output retained by older checkouts
-/out/
-/vcpkg_installed/
